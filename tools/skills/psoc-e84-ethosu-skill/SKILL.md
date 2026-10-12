@@ -92,6 +92,14 @@ python tools/skills/psoc-e84-ethosu-skill/scripts/run_pipeline.py \
   --target psoc_e84
 ```
 
+## Real-model examples
+
+- YOLOv8n pipeline:
+  - `examples/yolov8n/run_yolov8n_pipeline.py`
+- CRNN pipeline:
+  - `examples/crnn/run_crnn_pipeline.py`
+  - runs strict full-int8 attempt first, then optional relaxed conversion for diagnosis
+
 ## Failure Diagnosis Shortcuts
 
 - **onnx2tf / tensorflow missing**

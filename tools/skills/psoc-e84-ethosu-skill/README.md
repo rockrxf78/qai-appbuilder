@@ -37,7 +37,7 @@ It does **not** modify existing Qualcomm QNN workflow files.
 - `scripts/run_fvp_harness.py` - Corstone-300 build/run hooks
 - `scripts/run_pipeline.py` - staged loop orchestration
 - `references/` - operator patching, quantization, troubleshooting docs
-- `examples/` - tiny CNN demo helpers
+- `examples/` - tiny CNN and real-model pipeline helpers
 
 ---
 
@@ -52,6 +52,19 @@ python tools/skills/psoc-e84-ethosu-skill/scripts/run_pipeline.py \
 ```
 
 If you already have a model and calibration data, call stage scripts directly.
+
+Real-model scripts:
+
+```bash
+python3 tools/skills/psoc-e84-ethosu-skill/examples/yolov8n/run_yolov8n_pipeline.py \
+  --work-dir tools/skills/psoc-e84-ethosu-skill/build/yolov8n \
+  --dataset-yaml coco128.yaml \
+  --calib-samples 128 --eval-samples 32
+
+python3 tools/skills/psoc-e84-ethosu-skill/examples/crnn/run_crnn_pipeline.py \
+  --work-dir tools/skills/psoc-e84-ethosu-skill/build/crnn \
+  --calib-samples 160 --eval-samples 120
+```
 
 ### Vela compile modes
 
@@ -75,64 +88,94 @@ If you already have a model and calibration data, call stage scripts directly.
 
 ---
 
-## Verified vs unverified in this repository
+## Real-model validation snapshot (cloud VM)
 
-### Verified in-cloud (this branch)
+The following runs were executed in this branch with the scripts under `examples/`.
 
-- Skill and script structure added under a new directory.
-- End-to-end script wiring for staged loop is implemented.
-- Preflight, conversion, compile, reporting, and harness scripts are executable
-  Python files with explicit error guidance.
-- Tiny demo was executed on this Cloud VM through:
-  - PyTorch -> ONNX export
-  - ONNX checks
-  - ONNX -> TFLite int8 conversion
-  - Vela compile + report generation
-- Generated artifacts (example run):
-  - `tools/skills/psoc-e84-ethosu-skill/build/pipeline_demo/tinycnn.onnx`
-  - `tools/skills/psoc-e84-ethosu-skill/build/pipeline_demo/tinycnn_int8.tflite`
-  - `tools/skills/psoc-e84-ethosu-skill/build/pipeline_demo/vela/vela_compile_report.json`
-  - `tools/skills/psoc-e84-ethosu-skill/build/pipeline_demo/accuracy_report.json`
+### YOLOv8n (ultralytics pretrained, COCO128 images)
 
-### Verified compile mode used in this branch
+- Calibration data: 128 real images (`build/yolov8n/yolo_rep_data.npy`)
+- Validation subset: first 32 images from COCO128 val set
+- Full pipeline status:
+  - PyTorch -> ONNX: success
+  - ONNX -> TFLite full-int8: success (`int8` input/output)
+  - Vela custom `psoc_e84` compile: success (no built-in fallback)
 
-- Primary custom profile now compiles **without built-in fallback**:
+Key outputs:
+- `build/yolov8n/yolov8n.onnx`
+- `build/yolov8n/yolov8n_int8.tflite`
+- `build/yolov8n/vela/vela_compile_report.json`
+- `build/yolov8n/yolov8n_raw_output_diff.json`
+- `build/yolov8n/yolov8n_detection_match_pt_vs_onnx.json`
+- `build/yolov8n/yolov8n_detection_match_pt_vs_tflite.json`
+
+Observed metrics:
+- Operator placement: NPU `291 (92.1%)`, CPU `25 (7.9%)`
+  - CPU fallback is mostly `TRANSPOSE`
+- Memory/cycles from Vela summary:
+  - SRAM arena estimate: `11200 KB` (**exceeds** 5 MB SoCMEM / 4096 KB arena budget)
+  - Flash weights estimate: `2856.69 KB` (within 128 MB Flash budget)
+  - Estimated cycles/inference: `98,716,312`
+- Accuracy drift:
+  - ONNX vs TFLite raw outputs: cosine mean `0.9988`, max-abs max `549.19`
+  - PT vs ONNX detection signature match (count/class-jaccard/top1): `0.75 / 0.948 / 1.0`
+  - PT vs TFLite detection signature match: count `0.0`, class-jaccard `0.0`
+
+Interpretation:
+- Quantization numerics stay close at tensor level, but post-processing/detection
+  behavior diverges severely for this export path and settings.
+
+### CRNN (rockrxf78/crnn-pytorch)
+
+- Repo path: `build/crnn-pytorch` (cloned)
+- Pretrained checkpoint used: `checkpoints/crnn_synth90k.pt`
+- Calibration/eval data: 160 synthetic text-line images (grayscale, 32x100)
+
+Key outputs:
+- `build/crnn/crnn_synth90k.onnx`
+- `build/crnn/crnn_strict_int8_attempt.json`
+- `build/crnn/crnn_relaxed_int8_attempt.json`
+- `build/crnn/crnn_synth90k_relaxed.tflite`
+- `build/crnn/vela-relaxed/vela_compile_report.json`
+- `build/crnn/crnn_accuracy_report.json`
+- `build/crnn/crnn_vs_pytorch_report.json`
+
+Observed metrics:
+- Strict full-int8 quantization: **failed** (onnx2tf conversion stopped in RNN/LSTM section)
+- Relaxed conversion (`--allow-non-int8-output`): rerun also failed; script reused existing relaxed artifact from prior successful conversion and recorded this in `crnn_relaxed_int8_attempt.json`
+- Vela (relaxed model) operator placement:
+  - NPU `0 (0.0%)`, CPU `152 (100.0%)`
+  - includes `WHILE`, LSTM-related ops, reshape/gather/split etc.
+- Memory/cycles from Vela summary:
+  - SRAM estimate: `1000 KB` (within 5 MB SoCMEM)
+  - Flash estimate: `0 KB`
+  - cycles reported as `0` (not meaningful for this all-CPU relaxed graph)
+- Accuracy drift vs PyTorch (120 synthetic samples):
+  - ONNX vs PyTorch: sequence agreement `1.0`, CER `0.0`
+  - TFLite(relaxed) vs PyTorch: sequence agreement `0.525`, CER `0.0969`
+
+Interpretation:
+- Current toolchain path cannot provide production-usable full-int8/NPU execution
+  for this CRNN architecture without model redesign.
+
+## Compile mode and fallback policy
+
+- Primary custom profile:
   - `System_Config=psoc_e84_syscfg`
   - `Memory_Mode=psoc_e84_balanced`
-- Current Vela (5.2.0) Regor path still reports
-  `Feature Map memory not configured` for this custom profile, so the scripts
-  use `--debug-force-legacy-core` by default for the primary compile path.
-- Resulting report from the latest run confirms:
-  - `used_fallback_profile: false`
-  - `weights_storage_area: Off-chip Flash`
-  - `feature_map_storage_area: SRAM`
+- Scripts use `--debug-force-legacy-core` by default because current Vela Regor
+  path still rejects this custom profile (`Feature Map memory not configured`).
+- Built-in profile fallback remains **opt-in only** (`--allow-fallback`).
 
-### Optional fallback mode (explicit opt-in only)
+## Not verified in this repository
 
-- Built-in profile fallback is **disabled by default**.
-- To enable fallback explicitly:
-  - pipeline entry: `run_pipeline.py --allow-fallback`
-  - direct compile: `compile_with_vela.py --allow-fallback`
+- Corstone-300 FVP execution of a real TFLite Micro + Ethos-U firmware image
+- Hardware execution on actual PSoC Edge E84 board
+- ModusToolbox integration, flashing, and board-level perf/latency/power
+- Board-accurate memory timing parameters for Vela config
 
-### Not yet verified in-cloud (requires external toolchains/hardware assets)
+## Facts to re-check against official sources
 
-- Corstone-300 FVP execution with a real TFLM Ethos-U app image.
-- Hardware execution on an actual PSoC Edge E84 board.
-- ModusToolbox-specific build integration and flashing pipeline.
-- Board-accurate SRAM/PSRAM/Flash latency parameters for Vela config.
-
----
-
-## Facts that should be re-validated by users
-
-The following are treated as target assumptions and should be validated against
-official board documentation/BSP before production use:
-
-- PSoC E84 memory split and exact accessible arena budget.
-- Ethos-U55-128 deployment clock/latency profile and bus characteristics.
-- Final FVP model and flags used for your runtime stack.
-
-Also note from the current tiny demo:
-- Quantized TFLite output has significant drift versus PyTorch golden
-  (cosine ~0.66 in this random-data demo), so this demo is a pipeline sanity
-  check, not an accuracy-qualified production baseline.
+- Exact E84 deployable tensor-arena budget and linker placement constraints
+- Final Ethos-U55-128 frequency/timing profile used in product firmware
+- FVP model/version/flags matching your runtime integration

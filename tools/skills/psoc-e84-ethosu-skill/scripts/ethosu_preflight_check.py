@@ -43,6 +43,10 @@ def check_python_modules() -> list[CheckResult]:
         ("torch", "pip install torch"),
         ("tensorflow", "pip install tensorflow"),
         ("onnx2tf", "pip install onnx2tf"),
+        ("onnxruntime", "pip install onnxruntime"),
+        ("ultralytics", "pip install ultralytics"),
+        ("PIL", "pip install Pillow"),
+        ("scipy", "pip install scipy"),
     ]
     results: list[CheckResult] = []
     for mod_name, fix in required:

@@ -13,6 +13,7 @@ import tempfile
 from pathlib import Path
 
 import numpy as np
+import tensorflow as tf
 
 
 def _load_onnx():
@@ -69,23 +70,52 @@ def _normalize_for_quant(data: np.ndarray) -> np.ndarray:
     return scaled.astype(np.float32)
 
 
-def _select_quantized_tflite(output_dir: Path) -> Path:
-    preferred_patterns = [
-        "*full_integer_quant*.tflite",
-        "*integer_quant*.tflite",
-        "*int8*.tflite",
-        "*.tflite",
+def _select_quantized_tflite(
+    output_dir: Path,
+    model_stem: str,
+    allow_non_int8_output: bool,
+) -> Path:
+    # Strict full-integer preference to avoid accidentally selecting int16_act
+    # or float fallback artifacts.
+    strict_candidates = [
+        output_dir / f"{model_stem}_full_integer_quant.tflite",
+        output_dir / "full_integer_quant.tflite",
     ]
-    for pattern in preferred_patterns:
-        candidates = sorted(output_dir.glob(pattern))
-        filtered = [
-            p
-            for p in candidates
-            if "float16" not in p.name and "float32" not in p.name
+    for candidate in strict_candidates:
+        if candidate.exists():
+            return candidate
+
+    exact_named = sorted(output_dir.glob("*_full_integer_quant.tflite"))
+    if exact_named:
+        return exact_named[-1]
+
+    if allow_non_int8_output:
+        relaxed_patterns = [
+            "*integer_quant_with_int16_act*.tflite",
+            "*full_integer_quant_with_int16_act*.tflite",
+            "*integer_quant*.tflite",
+            "*dynamic_range_quant*.tflite",
+            "*float16*.tflite",
+            "*float32*.tflite",
         ]
-        if filtered:
-            return filtered[-1]
-    raise RuntimeError(f"No TFLite artifacts found in {output_dir}")
+        for pattern in relaxed_patterns:
+            candidates = sorted(output_dir.glob(pattern))
+            if candidates:
+                return candidates[-1]
+
+    generated = [p.name for p in sorted(output_dir.glob("*.tflite"))]
+    raise RuntimeError(
+        "No full integer INT8 TFLite artifact found. "
+        "Generated artifacts: " + ", ".join(generated)
+    )
+
+
+def _probe_tflite_io_dtype(model_path: Path) -> tuple[str, str]:
+    interpreter = tf.lite.Interpreter(model_path=str(model_path))
+    interpreter.allocate_tensors()
+    input_dtype = str(interpreter.get_input_details()[0]["dtype"])
+    output_dtype = str(interpreter.get_output_details()[0]["dtype"])
+    return input_dtype, output_dtype
 
 
 def main() -> int:
@@ -113,6 +143,36 @@ def main() -> int:
         type=int,
         default=100,
         help="Max calibration samples",
+    )
+    parser.add_argument(
+        "--allow-non-int8-output",
+        action="store_true",
+        help=(
+            "Allow selecting non-full-int8 artifacts (int16_act/dynamic/float) "
+            "if full_integer_quant is unavailable."
+        ),
+    )
+    parser.add_argument(
+        "--transpose-nchw-to-nhwc",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Transpose representative data from NCHW to NHWC before calibration",
+    )
+    parser.add_argument(
+        "--auto-normalize",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="Apply min-max normalization to representative data before calibration",
+    )
+    parser.add_argument(
+        "--quant-norm-mean",
+        default="",
+        help="Override onnx2tf -qnm argument (e.g. '[[[[0.0,0.0,0.0]]]]')",
+    )
+    parser.add_argument(
+        "--quant-norm-std",
+        default="",
+        help="Override onnx2tf -qns argument (e.g. '[[[[1.0,1.0,1.0]]]]')",
     )
     args = parser.parse_args()
 
@@ -145,10 +205,15 @@ def main() -> int:
 
     # onnx2tf calibration path expects data shaped like the converted TF input,
     # which is typically NHWC for image tensors.
-    if rep_data.ndim == 4 and args.input_layout == "nchw":
+    if (
+        rep_data.ndim == 4
+        and args.input_layout == "nchw"
+        and args.transpose_nchw_to_nhwc
+    ):
         rep_data = np.transpose(rep_data, (0, 2, 3, 1))
 
-    rep_data = _normalize_for_quant(rep_data)
+    if args.auto_normalize:
+        rep_data = _normalize_for_quant(rep_data)
 
     work_dir = Path(args.work_dir).resolve()
     work_dir.mkdir(parents=True, exist_ok=True)
@@ -161,8 +226,8 @@ def main() -> int:
         channels = 1
         if rep_data.ndim == 4:
             channels = int(rep_data.shape[3])
-        mean = "[" + ",".join(["0.0"] * channels) + "]"
-        std = "[" + ",".join(["1.0"] * channels) + "]"
+        mean = args.quant_norm_mean or ("[[[[" + ",".join(["0.0"] * channels) + "]]]]")
+        std = args.quant_norm_std or ("[[[[" + ",".join(["1.0"] * channels) + "]]]]")
 
         cmd = [
             onnx2tf_cmd,
@@ -185,9 +250,9 @@ def main() -> int:
             "-tb",
             "tf_converter",
             "-qnm",
-            "[[[[0.0,0.0,0.0]]]]",
+            mean,
             "-qns",
-            "[[[[1.0,1.0,1.0]]]]",
+            std,
         ]
 
         env = dict(**os.environ)
@@ -206,12 +271,25 @@ def main() -> int:
                 f"stdout:\n{completed.stdout}\n\nstderr:\n{completed.stderr}"
             )
 
-    produced = _select_quantized_tflite(work_dir)
+    produced = _select_quantized_tflite(
+        output_dir=work_dir,
+        model_stem=onnx_path.stem,
+        allow_non_int8_output=args.allow_non_int8_output,
+    )
 
     out_path = Path(args.tflite_out).resolve()
     out_path.parent.mkdir(parents=True, exist_ok=True)
     shutil.copy2(produced, out_path)
     print(f"[OK] int8 TFLite written: {out_path}")
+    input_dtype, output_dtype = _probe_tflite_io_dtype(out_path)
+    print(f"[INFO] selected model io dtypes: input={input_dtype}, output={output_dtype}")
+    if not args.allow_non_int8_output and (
+        "int8" not in input_dtype.lower() or "int8" not in output_dtype.lower()
+    ):
+        raise RuntimeError(
+            "Selected artifact is not full int8 I/O. "
+            f"Detected input={input_dtype}, output={output_dtype}."
+        )
 
     meta = {
         "onnx": str(onnx_path),
@@ -220,8 +298,15 @@ def main() -> int:
         "onnx_layout": onnx_layout,
         "tflite_out": str(out_path),
         "tflite_source_artifact": str(produced),
+        "selected_input_dtype": input_dtype,
+        "selected_output_dtype": output_dtype,
         "representative_data": str(rep_path),
         "input_layout": args.input_layout,
+        "transpose_nchw_to_nhwc": args.transpose_nchw_to_nhwc,
+        "auto_normalize": args.auto_normalize,
+        "quant_norm_mean": mean,
+        "quant_norm_std": std,
+        "allow_non_int8_output": args.allow_non_int8_output,
         "max_representative_samples": args.max_representative_samples,
         "work_dir": str(work_dir),
     }

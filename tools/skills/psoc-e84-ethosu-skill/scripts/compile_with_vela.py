@@ -33,6 +33,9 @@ def _extract_cpu_fallback_ops(log_text: str) -> list[str]:
         r"CPU operation[:\s]+(.+)",
         r"will run on CPU[:\s]+(.+)",
         r"placed on cpu[:\s]+(.+)",
+        r"for (.+?)\.?\s*Placing on CPU instead",
+        r"Unsupported .* for ([^']+)'?\.?\s*Placing on CPU instead",
+        r"Warning:\s*([A-Z0-9_]+)\s*'([^']+)'.*Placing on CPU instead",
     ]
     ops: list[str] = []
     for line in log_text.splitlines():
@@ -42,9 +45,25 @@ def _extract_cpu_fallback_ops(log_text: str) -> list[str]:
         for pattern in patterns:
             match = re.search(pattern, line, flags=re.IGNORECASE)
             if match:
-                ops.append(match.group(1).strip())
+                if match.lastindex and match.lastindex >= 2:
+                    ops.append(f"{match.group(1).strip()}::{match.group(2).strip()}")
+                else:
+                    ops.append(match.group(1).strip())
                 break
     return sorted(set(ops))
+
+
+def _parse_operator_breakdown(log_text: str) -> dict[str, float | int]:
+    payload: dict[str, float | int] = {}
+    cpu_match = re.search(r"CPU operators\s*=\s*(\d+)\s*\(([\d\.]+)%\)", log_text)
+    npu_match = re.search(r"NPU operators\s*=\s*(\d+)\s*\(([\d\.]+)%\)", log_text)
+    if cpu_match:
+        payload["cpu_operator_count"] = int(cpu_match.group(1))
+        payload["cpu_operator_ratio_percent"] = float(cpu_match.group(2))
+    if npu_match:
+        payload["npu_operator_count"] = int(npu_match.group(1))
+        payload["npu_operator_ratio_percent"] = float(npu_match.group(2))
+    return payload
 
 
 def _read_summary_csv(output_dir: Path) -> list[dict[str, str]]:
@@ -71,18 +90,32 @@ def _first_float(row: dict[str, str], candidate_keys: list[str]) -> float | None
 
 def _estimate_arena_usage_kb(summary_rows: list[dict[str, str]]) -> float | None:
     for row in summary_rows:
-        value = _first_float(
-            row,
-            [
-                "arena_size",
-                "arena_memory",
-                "arena_memory_used",
-                "sram_used",
-                "total_arena_memory",
-            ],
-        )
-        if value is not None:
-            return value / 1024.0 if value > 4096 else value
+        for key in [
+            "sram_memory_used",      # KiB in Vela summary CSV
+            "arena_memory_used",     # usually KiB
+            "arena_size",            # tool-dependent
+            "arena_memory",
+            "sram_used",
+            "total_arena_memory",    # may be bytes in some tool versions
+        ]:
+            if key not in row:
+                continue
+            try:
+                value = float(str(row[key]).strip())
+            except ValueError:
+                continue
+            if key == "total_arena_memory" and value > 1024 * 1024:
+                return value / 1024.0
+            return value
+    return None
+
+
+def _estimate_flash_usage_kb(summary_rows: list[dict[str, str]]) -> float | None:
+    for row in summary_rows:
+        offchip = _first_float(row, ["off_chip_flash_memory_used"])
+        onchip = _first_float(row, ["on_chip_flash_memory_used"])
+        if offchip is not None or onchip is not None:
+            return float((offchip or 0.0) + (onchip or 0.0))
     return None
 
 
@@ -230,6 +263,10 @@ def main() -> int:
     )
     summary_rows = _read_summary_csv(output_dir)
     arena_kb = _estimate_arena_usage_kb(summary_rows)
+    flash_kb = _estimate_flash_usage_kb(summary_rows)
+    operator_breakdown = _parse_operator_breakdown(
+        active_completed.stdout + "\n" + active_completed.stderr
+    )
 
     warnings = []
     if args.legacy_core:
@@ -252,6 +289,17 @@ def main() -> int:
         warnings.append(
             f"Arena estimate {arena_kb:.1f}KB exceeds target budget {target.arena_budget_kb}KB."
         )
+    sram_exceed_match = re.search(
+        r"SRAM target for arena memory area exceeded\.\s*Target\s*=\s*(\d+)\s*Bytes,\s*Actual\s*=\s*(\d+)\s*Bytes",
+        active_completed.stdout + "\n" + active_completed.stderr,
+        flags=re.IGNORECASE,
+    )
+    if sram_exceed_match:
+        target_bytes = int(sram_exceed_match.group(1))
+        actual_bytes = int(sram_exceed_match.group(2))
+        warnings.append(
+            f"SRAM target exceeded in Vela log: target={target_bytes} bytes, actual={actual_bytes} bytes."
+        )
 
     report = {
         "input_tflite": str(input_model),
@@ -264,8 +312,11 @@ def main() -> int:
         "active_command": active_cmd,
         "compiled_models": [str(p) for p in compiled_models],
         "cpu_fallback_ops": cpu_fallback_ops,
+        "operator_breakdown": operator_breakdown,
         "arena_estimate_kb": arena_kb,
+        "flash_estimate_kb": flash_kb,
         "target_arena_budget_kb": target.arena_budget_kb,
+        "target_flash_budget_kb": target.flash_mb * 1024,
         "summary_rows": summary_rows,
         "warnings": warnings,
         "vela_log_path": str(log_path),
