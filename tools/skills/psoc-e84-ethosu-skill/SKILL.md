@@ -70,6 +70,9 @@ with CMSIS-NN/CPU fallback for unsupported ops.
    - Analyze generated report:
      - CPU fallback operators
      - arena estimate vs SoCMEM budget
+   - Default compile mode uses `--debug-force-legacy-core` for the custom
+     PSoC profile on current Vela release.
+   - Built-in profile fallback is opt-in only (`--allow-fallback`).
 
 6. **Accuracy checks**
    - `scripts/compare_accuracy.py`
@@ -95,9 +98,10 @@ python tools/skills/psoc-e84-ethosu-skill/scripts/run_pipeline.py \
   - Install required packages and rerun preflight.
 - **Vela compile fails**
   - Confirm `ethos-u-vela` install and target config names.
-  - Inspect `vela_stdout_stderr.log`.
-  - If custom `psoc_e84` system/memory sections fail, use built-in fallback
-    (`Ethos_U55_High_End_Embedded` + `Shared_Sram`) and record this explicitly.
+  - Inspect `vela_primary_stdout_stderr.log`.
+  - If explicitly enabled, inspect `vela_fallback_stdout_stderr.log`.
+  - Built-in fallback is not automatic; pass `--allow-fallback` only when you
+    intentionally want fallback behavior.
 - **High CPU fallback ratio**
   - Check unsupported ops and rewrite pattern in references.
 - **Arena overflow**

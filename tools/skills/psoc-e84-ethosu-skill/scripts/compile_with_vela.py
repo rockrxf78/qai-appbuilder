@@ -111,9 +111,18 @@ def main() -> int:
         help="Additional Vela arguments appended at the end",
     )
     parser.add_argument(
-        "--disable-fallback",
+        "--allow-fallback",
         action="store_true",
-        help="Disable fallback to built-in Vela system/memory profile on failure",
+        help="Explicitly allow fallback to built-in Vela profile when primary compile fails",
+    )
+    parser.add_argument(
+        "--legacy-core",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help=(
+            "Use Vela legacy Python core for primary compile "
+            "(default: enabled, because current Regor path rejects custom psoc_e84 profile)."
+        ),
     )
     parser.add_argument(
         "--fallback-system-config",
@@ -151,6 +160,8 @@ def main() -> int:
         "--output-dir",
         str(output_dir),
     ] + args.extra_args
+    if args.legacy_core:
+        primary_cmd.append("--debug-force-legacy-core")
 
     print("=" * 72)
     print("Vela compile command")
@@ -172,7 +183,7 @@ def main() -> int:
     log_path = primary_log_path
     initial_error = None
 
-    if completed.returncode != 0 and not args.disable_fallback:
+    if completed.returncode != 0 and args.allow_fallback:
         initial_error = completed.stderr.strip() or completed.stdout.strip()
         fallback_cmd = [
             vela,
@@ -221,6 +232,11 @@ def main() -> int:
     arena_kb = _estimate_arena_usage_kb(summary_rows)
 
     warnings = []
+    if args.legacy_core:
+        warnings.append(
+            "Primary compile used --debug-force-legacy-core to support custom psoc_e84 profile "
+            "on current Vela release."
+        )
     if used_fallback:
         warnings.append(
             "Primary PSoC custom config failed; compiled using fallback built-in "
@@ -243,6 +259,7 @@ def main() -> int:
         "accelerator_config": target.accelerator_config,
         "system_config": target.system_config,
         "memory_mode": target.memory_mode,
+        "used_legacy_core": args.legacy_core,
         "used_fallback_profile": used_fallback,
         "active_command": active_cmd,
         "compiled_models": [str(p) for p in compiled_models],

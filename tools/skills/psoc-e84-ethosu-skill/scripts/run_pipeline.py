@@ -45,6 +45,11 @@ def main() -> int:
         action="store_true",
         help="Skip preflight stage",
     )
+    parser.add_argument(
+        "--allow-fallback",
+        action="store_true",
+        help="Allow compile_with_vela.py to fallback to built-in Vela profile",
+    )
     args = parser.parse_args()
 
     script_dir = Path(__file__).resolve().parent
@@ -115,19 +120,19 @@ def main() -> int:
         ],
         cwd=root_dir,
     )
-    _run(
-        [
-            sys.executable,
-            str(script_dir / "compile_with_vela.py"),
-            "--tflite",
-            str(tflite_path),
-            "--target",
-            args.target,
-            "--output-dir",
-            str(vela_out_dir),
-        ],
-        cwd=root_dir,
-    )
+    vela_cmd = [
+        sys.executable,
+        str(script_dir / "compile_with_vela.py"),
+        "--tflite",
+        str(tflite_path),
+        "--target",
+        args.target,
+        "--output-dir",
+        str(vela_out_dir),
+    ]
+    if args.allow_fallback:
+        vela_cmd.append("--allow-fallback")
+    _run(vela_cmd, cwd=root_dir)
     _run(
         [
             sys.executable,

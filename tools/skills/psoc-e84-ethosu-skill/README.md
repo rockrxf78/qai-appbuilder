@@ -53,6 +53,16 @@ python tools/skills/psoc-e84-ethosu-skill/scripts/run_pipeline.py \
 
 If you already have a model and calibration data, call stage scripts directly.
 
+### Vela compile modes
+
+- Default behavior (custom profile, no fallback):
+  - `compile_with_vela.py` uses `--debug-force-legacy-core`
+  - built-in fallback is disabled
+- Optional fallback (explicit only):
+  - add `--allow-fallback`
+- Regor-only experiment (expected to fail for current custom profile):
+  - add `--no-legacy-core`
+
 ---
 
 ## Assumptions
@@ -84,16 +94,25 @@ If you already have a model and calibration data, call stage scripts directly.
   - `tools/skills/psoc-e84-ethosu-skill/build/pipeline_demo/vela/vela_compile_report.json`
   - `tools/skills/psoc-e84-ethosu-skill/build/pipeline_demo/accuracy_report.json`
 
-### Partially verified (works with fallback)
+### Verified compile mode used in this branch
 
-- Primary custom profile (`psoc_e84_syscfg` + `psoc_e84_balanced`) currently
-  fails on Vela 5.2.0 with:
-  - `RuntimeError: Compilation failed: Feature Map memory not configured`
-- `compile_with_vela.py` therefore performs an automatic fallback to built-in:
-  - `System_Config=Ethos_U55_High_End_Embedded`
-  - `Memory_Mode=Shared_Sram`
-- Fallback run produced a valid `_vela.tflite` and CPU fallback ops = 0 for the
-  tiny model.
+- Primary custom profile now compiles **without built-in fallback**:
+  - `System_Config=psoc_e84_syscfg`
+  - `Memory_Mode=psoc_e84_balanced`
+- Current Vela (5.2.0) Regor path still reports
+  `Feature Map memory not configured` for this custom profile, so the scripts
+  use `--debug-force-legacy-core` by default for the primary compile path.
+- Resulting report from the latest run confirms:
+  - `used_fallback_profile: false`
+  - `weights_storage_area: Off-chip Flash`
+  - `feature_map_storage_area: SRAM`
+
+### Optional fallback mode (explicit opt-in only)
+
+- Built-in profile fallback is **disabled by default**.
+- To enable fallback explicitly:
+  - pipeline entry: `run_pipeline.py --allow-fallback`
+  - direct compile: `compile_with_vela.py --allow-fallback`
 
 ### Not yet verified in-cloud (requires external toolchains/hardware assets)
 
