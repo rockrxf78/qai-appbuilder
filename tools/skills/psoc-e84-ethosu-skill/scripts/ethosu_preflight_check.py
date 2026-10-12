@@ -28,6 +28,9 @@ def _find_cmd(candidates: list[str]) -> str | None:
         resolved = shutil.which(cmd)
         if resolved:
             return resolved
+        local_bin = Path.home() / ".local" / "bin" / cmd
+        if local_bin.exists():
+            return str(local_bin)
     return None
 
 

@@ -96,6 +96,8 @@ python tools/skills/psoc-e84-ethosu-skill/scripts/run_pipeline.py \
 - **Vela compile fails**
   - Confirm `ethos-u-vela` install and target config names.
   - Inspect `vela_stdout_stderr.log`.
+  - If custom `psoc_e84` system/memory sections fail, use built-in fallback
+    (`Ethos_U55_High_End_Embedded` + `Shared_Sram`) and record this explicitly.
 - **High CPU fallback ratio**
   - Check unsupported ops and rewrite pattern in references.
 - **Arena overflow**

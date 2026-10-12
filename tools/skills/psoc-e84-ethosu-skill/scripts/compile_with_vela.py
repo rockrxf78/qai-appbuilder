@@ -22,6 +22,9 @@ def _find_vela() -> str:
         resolved = shutil.which(cmd)
         if resolved:
             return resolved
+        local_bin = Path.home() / ".local" / "bin" / cmd
+        if local_bin.exists():
+            return str(local_bin)
     raise RuntimeError("Vela CLI not found. Install with `pip install ethos-u-vela`.")
 
 
@@ -107,6 +110,21 @@ def main() -> int:
         default=[],
         help="Additional Vela arguments appended at the end",
     )
+    parser.add_argument(
+        "--disable-fallback",
+        action="store_true",
+        help="Disable fallback to built-in Vela system/memory profile on failure",
+    )
+    parser.add_argument(
+        "--fallback-system-config",
+        default="Ethos_U55_High_End_Embedded",
+        help="Fallback built-in Vela system config",
+    )
+    parser.add_argument(
+        "--fallback-memory-mode",
+        default="Shared_Sram",
+        help="Fallback built-in Vela memory mode",
+    )
     args = parser.parse_args()
 
     target = get_target(args.target)
@@ -118,7 +136,7 @@ def main() -> int:
     output_dir = Path(args.output_dir).resolve()
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    cmd = [
+    primary_cmd = [
         vela,
         str(input_model),
         "--accelerator-config",
@@ -137,29 +155,79 @@ def main() -> int:
     print("=" * 72)
     print("Vela compile command")
     print("=" * 72)
-    print(" ".join(cmd))
+    print(" ".join(primary_cmd))
     print("-" * 72)
     print(f"target memory profile: {format_human_memory(target)}")
 
-    completed = subprocess.run(cmd, capture_output=True, text=True)
-    log_path = output_dir / "vela_stdout_stderr.log"
-    log_path.write_text(
-        f"STDOUT:\n{completed.stdout}\n\nSTDERR:\n{completed.stderr}", encoding="utf-8"
+    completed = subprocess.run(primary_cmd, capture_output=True, text=True)
+    primary_log_path = output_dir / "vela_primary_stdout_stderr.log"
+    primary_log_path.write_text(
+        f"CMD: {' '.join(primary_cmd)}\n\nSTDOUT:\n{completed.stdout}\n\nSTDERR:\n{completed.stderr}",
+        encoding="utf-8",
     )
 
-    if completed.returncode != 0:
+    used_fallback = False
+    active_completed = completed
+    active_cmd = primary_cmd
+    log_path = primary_log_path
+    initial_error = None
+
+    if completed.returncode != 0 and not args.disable_fallback:
+        initial_error = completed.stderr.strip() or completed.stdout.strip()
+        fallback_cmd = [
+            vela,
+            str(input_model),
+            "--accelerator-config",
+            target.accelerator_config,
+            "--system-config",
+            args.fallback_system_config,
+            "--memory-mode",
+            args.fallback_memory_mode,
+            "--show-cpu-operations",
+            "--output-dir",
+            str(output_dir),
+        ] + args.extra_args
+        fallback_completed = subprocess.run(fallback_cmd, capture_output=True, text=True)
+        fallback_log_path = output_dir / "vela_fallback_stdout_stderr.log"
+        fallback_log_path.write_text(
+            f"CMD: {' '.join(fallback_cmd)}\n\nSTDOUT:\n{fallback_completed.stdout}\n\nSTDERR:\n{fallback_completed.stderr}",
+            encoding="utf-8",
+        )
+        if fallback_completed.returncode == 0:
+            used_fallback = True
+            active_completed = fallback_completed
+            active_cmd = fallback_cmd
+            log_path = fallback_log_path
+        else:
+            raise RuntimeError(
+                "Vela compile failed for both primary and fallback profiles.\n"
+                f"Primary log: {primary_log_path}\n"
+                f"Fallback log: {fallback_log_path}\n"
+                f"Primary stderr:\n{completed.stderr}\n\n"
+                f"Fallback stderr:\n{fallback_completed.stderr}"
+            )
+    elif completed.returncode != 0:
         raise RuntimeError(
             "Vela compile failed.\n"
-            f"See {log_path}\n"
+            f"See {primary_log_path}\n"
             f"stdout:\n{completed.stdout}\n\nstderr:\n{completed.stderr}"
         )
 
     compiled_models = sorted(output_dir.glob("*_vela.tflite"))
-    cpu_fallback_ops = _extract_cpu_fallback_ops(completed.stdout + "\n" + completed.stderr)
+    cpu_fallback_ops = _extract_cpu_fallback_ops(
+        active_completed.stdout + "\n" + active_completed.stderr
+    )
     summary_rows = _read_summary_csv(output_dir)
     arena_kb = _estimate_arena_usage_kb(summary_rows)
 
     warnings = []
+    if used_fallback:
+        warnings.append(
+            "Primary PSoC custom config failed; compiled using fallback built-in "
+            f"profile ({args.fallback_system_config}/{args.fallback_memory_mode})."
+        )
+        if initial_error:
+            warnings.append(f"Primary config error: {initial_error.splitlines()[-1]}")
     if cpu_fallback_ops:
         warnings.append(
             "CPU fallback ops detected. Inspect operator patching guidance before acceptance."
@@ -175,6 +243,8 @@ def main() -> int:
         "accelerator_config": target.accelerator_config,
         "system_config": target.system_config,
         "memory_mode": target.memory_mode,
+        "used_fallback_profile": used_fallback,
+        "active_command": active_cmd,
         "compiled_models": [str(p) for p in compiled_models],
         "cpu_fallback_ops": cpu_fallback_ops,
         "arena_estimate_kb": arena_kb,
@@ -182,6 +252,7 @@ def main() -> int:
         "summary_rows": summary_rows,
         "warnings": warnings,
         "vela_log_path": str(log_path),
+        "primary_log_path": str(primary_log_path),
     }
     report_path = output_dir / "vela_compile_report.json"
     report_path.write_text(json.dumps(report, indent=2), encoding="utf-8")

@@ -73,6 +73,27 @@ If you already have a model and calibration data, call stage scripts directly.
 - End-to-end script wiring for staged loop is implemented.
 - Preflight, conversion, compile, reporting, and harness scripts are executable
   Python files with explicit error guidance.
+- Tiny demo was executed on this Cloud VM through:
+  - PyTorch -> ONNX export
+  - ONNX checks
+  - ONNX -> TFLite int8 conversion
+  - Vela compile + report generation
+- Generated artifacts (example run):
+  - `tools/skills/psoc-e84-ethosu-skill/build/pipeline_demo/tinycnn.onnx`
+  - `tools/skills/psoc-e84-ethosu-skill/build/pipeline_demo/tinycnn_int8.tflite`
+  - `tools/skills/psoc-e84-ethosu-skill/build/pipeline_demo/vela/vela_compile_report.json`
+  - `tools/skills/psoc-e84-ethosu-skill/build/pipeline_demo/accuracy_report.json`
+
+### Partially verified (works with fallback)
+
+- Primary custom profile (`psoc_e84_syscfg` + `psoc_e84_balanced`) currently
+  fails on Vela 5.2.0 with:
+  - `RuntimeError: Compilation failed: Feature Map memory not configured`
+- `compile_with_vela.py` therefore performs an automatic fallback to built-in:
+  - `System_Config=Ethos_U55_High_End_Embedded`
+  - `Memory_Mode=Shared_Sram`
+- Fallback run produced a valid `_vela.tflite` and CPU fallback ops = 0 for the
+  tiny model.
 
 ### Not yet verified in-cloud (requires external toolchains/hardware assets)
 
@@ -91,3 +112,8 @@ official board documentation/BSP before production use:
 - PSoC E84 memory split and exact accessible arena budget.
 - Ethos-U55-128 deployment clock/latency profile and bus characteristics.
 - Final FVP model and flags used for your runtime stack.
+
+Also note from the current tiny demo:
+- Quantized TFLite output has significant drift versus PyTorch golden
+  (cosine ~0.66 in this random-data demo), so this demo is a pipeline sanity
+  check, not an accuracy-qualified production baseline.

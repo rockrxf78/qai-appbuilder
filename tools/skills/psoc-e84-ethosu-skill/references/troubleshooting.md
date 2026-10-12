@@ -23,6 +23,10 @@ Install missing modules shown by preflight.
 - Validate target config names (`system-config` and `memory-mode`) match `.ini`.
 - Ensure input model is quantized int8 TFLite.
 - Inspect generated log: `vela_stdout_stderr.log`.
+- If custom PSoC profile fails with memory-model errors, run with fallback:
+  - `--system-config Ethos_U55_High_End_Embedded`
+  - `--memory-mode Shared_Sram`
+  and keep the mismatch documented in the report.
 
 ## 4) High CPU fallback
 

@@ -32,13 +32,12 @@ def _build_tinycnn(torch):
                 torch.nn.ReLU(),
                 torch.nn.Conv2d(8, 8, kernel_size=3, stride=2, padding=1),
                 torch.nn.ReLU(),
-                torch.nn.AdaptiveAvgPool2d((1, 1)),
             )
-            self.head = torch.nn.Linear(8, 4)
+            self.head = torch.nn.Linear(8 * 16 * 16, 4)
 
         def forward(self, x):
             y = self.net(x)
-            y = y.flatten(1)
+            y = torch.flatten(y, start_dim=1)
             return self.head(y)
 
     return TinyCNN()
