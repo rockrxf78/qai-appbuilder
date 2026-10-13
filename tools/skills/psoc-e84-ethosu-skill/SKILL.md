@@ -95,7 +95,8 @@ python tools/skills/psoc-e84-ethosu-skill/scripts/run_pipeline.py \
 ## Real-model examples
 
 - YOLOv8n pipeline:
-  - `examples/yolov8n/run_yolov8n_pipeline.py`
+  - `examples/yolov8n/run_yolov8n_split_pipeline.py`
+  - exposes pre-concat box/score tensors separately before int8 quantization
 - CRNN pipeline:
   - `examples/crnn/run_crnn_pipeline.py`
   - runs strict full-int8 attempt first, then optional relaxed conversion for diagnosis
@@ -139,3 +140,4 @@ python tools/skills/psoc-e84-ethosu-skill/scripts/run_pipeline.py \
 - `scripts/compare_accuracy.py` - cross-framework accuracy checks
 - `scripts/run_fvp_harness.py` - Corstone-300 build/run hooks
 - `scripts/run_pipeline.py` - staged loop orchestrator
+- `examples/yolov8n/run_yolov8n_split_pipeline.py` - real-model split-output YOLO validation

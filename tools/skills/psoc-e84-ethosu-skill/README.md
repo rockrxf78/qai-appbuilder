@@ -56,10 +56,11 @@ If you already have a model and calibration data, call stage scripts directly.
 Real-model scripts:
 
 ```bash
-python3 tools/skills/psoc-e84-ethosu-skill/examples/yolov8n/run_yolov8n_pipeline.py \
+python3 tools/skills/psoc-e84-ethosu-skill/examples/yolov8n/run_yolov8n_split_pipeline.py \
   --work-dir tools/skills/psoc-e84-ethosu-skill/build/yolov8n \
   --dataset-yaml coco128.yaml \
-  --calib-samples 128 --eval-samples 32
+  --calib-samples 128 --eval-samples 32 \
+  --imgsz-candidates 320,256
 
 python3 tools/skills/psoc-e84-ethosu-skill/examples/crnn/run_crnn_pipeline.py \
   --work-dir tools/skills/psoc-e84-ethosu-skill/build/crnn \
@@ -94,36 +95,50 @@ The following runs were executed in this branch with the scripts under `examples
 
 ### YOLOv8n (ultralytics pretrained, COCO128 images)
 
-- Calibration data: 128 real images (`build/yolov8n/yolo_rep_data.npy`)
+- Calibration data: 128 real images (`build/yolov8n/imgsz_320/yolo_rep_data.npy`)
 - Validation subset: first 32 images from COCO128 val set
 - Full pipeline status:
   - PyTorch -> ONNX: success
-  - ONNX -> TFLite full-int8: success (`int8` input/output)
+  - ONNX output split (pre-concat): success
+    - boxes: `/model.22/Mul_2_output_0`
+    - scores: `/model.22/Sigmoid_output_0`
+  - ONNX -> TFLite full-int8: success (`int8` input/output, split outputs keep independent scales)
   - Vela custom `psoc_e84` compile: success (no built-in fallback)
 
 Key outputs:
-- `build/yolov8n/yolov8n.onnx`
-- `build/yolov8n/yolov8n_int8.tflite`
-- `build/yolov8n/vela/vela_compile_report.json`
-- `build/yolov8n/yolov8n_raw_output_diff.json`
-- `build/yolov8n/yolov8n_detection_match_pt_vs_onnx.json`
-- `build/yolov8n/yolov8n_detection_match_pt_vs_tflite.json`
+- `build/yolov8n/yolov8n_pipeline_summary.json`
+- `build/yolov8n/imgsz_320/yolov8n.onnx`
+- `build/yolov8n/imgsz_320/yolov8n_preconcat.onnx`
+- `build/yolov8n/imgsz_320/yolov8n_int8.tflite`
+- `build/yolov8n/imgsz_320/vela/vela_compile_report.json`
+- `build/yolov8n/imgsz_320/yolov8n_tflite_output_quantization.json`
+- `build/yolov8n/imgsz_320/yolov8n_raw_output_diff.json`
+- `build/yolov8n/imgsz_320/yolov8n_detection_match_pt_vs_onnx.json`
+- `build/yolov8n/imgsz_320/yolov8n_detection_match_pt_vs_tflite.json`
 
 Observed metrics:
-- Operator placement: NPU `291 (92.1%)`, CPU `25 (7.9%)`
-  - CPU fallback is mostly `TRANSPOSE`
+- Selected run: `imgsz=320` (`256` fallback not needed because 320 already fits arena budget)
+- Operator placement: NPU `289 (92.0%)`, CPU `25 (8.0%)`
+  - CPU fallback ops are still mostly `TRANSPOSE` (count remains 25)
 - Memory/cycles from Vela summary:
-  - SRAM arena estimate: `11200 KB` (**exceeds** 5 MB SoCMEM / 4096 KB arena budget)
-  - Flash weights estimate: `2856.69 KB` (within 128 MB Flash budget)
-  - Estimated cycles/inference: `98,716,312`
+  - SRAM arena estimate: `2800 KB` (**fits** 5 MB SoCMEM / 4096 KB arena budget)
+  - Flash weights estimate: `2839.64 KB` (within 128 MB Flash budget)
+  - Estimated cycles/inference: `25,077,420`
+- Output quantization (split-output check):
+  - class scores tensor scale: `0.00390625`
+  - box tensor scale: `1.6232509613`
+  - scales are separated (`split_output_quantization_ok: true`)
 - Accuracy drift:
-  - ONNX vs TFLite raw outputs: cosine mean `0.9988`, max-abs max `549.19`
-  - PT vs ONNX detection signature match (count/class-jaccard/top1): `0.75 / 0.948 / 1.0`
-  - PT vs TFLite detection signature match: count `0.0`, class-jaccard `0.0`
+  - ONNX vs TFLite raw outputs (split tensors):
+    - boxes cosine mean `0.9991`, max-abs max `239.35`
+    - scores cosine mean `0.9611`, max-abs max `0.7323`
+  - PT vs ONNX detection signature (count/class-jaccard/top1): `0.3125 / 0.7542 / 0.8571`
+  - PT vs TFLite detection signature (count/class-jaccard/top1): `0.3750 / 0.7198 / 0.8214`
 
 Interpretation:
-- Quantization numerics stay close at tensor level, but post-processing/detection
-  behavior diverges severely for this export path and settings.
+- Previous fused-output int8 path had severe detection collapse (class-jaccard near 0).
+- Split-output quantization recovered meaningful detections and non-zero agreement,
+  but parity with PT is still not production-grade and needs further tuning.
 
 ### CRNN (rockrxf78/crnn-pytorch)
 

@@ -14,27 +14,34 @@ python3 tools/skills/psoc-e84-ethosu-skill/scripts/run_pipeline.py \
 
 Runs:
 - PyTorch (ultralytics pretrained) -> ONNX
-- ONNX -> full-int8 TFLite (representative data from COCO images)
+- expose pre-concat detection head outputs (boxes/scores) as separate ONNX outputs
+- ONNX -> full-int8 TFLite (representative data from COCO images, 100+)
 - Vela compile with custom `psoc_e84` profile
 - Output diff + detection match reports
 
 ```bash
-python3 tools/skills/psoc-e84-ethosu-skill/examples/yolov8n/run_yolov8n_pipeline.py \
+python3 tools/skills/psoc-e84-ethosu-skill/examples/yolov8n/run_yolov8n_split_pipeline.py \
   --work-dir tools/skills/psoc-e84-ethosu-skill/build/yolov8n \
   --dataset-yaml coco128.yaml \
   --calib-samples 128 \
-  --eval-samples 32
+  --eval-samples 32 \
+  --imgsz-candidates 320,256
 ```
 
 Key outputs:
-- `build/yolov8n/yolov8n.onnx`
-- `build/yolov8n/yolov8n_int8.tflite`
-- `build/yolov8n/vela/vela_compile_report.json`
-- `build/yolov8n/yolov8n_raw_output_diff.json`
-- `build/yolov8n/yolov8n_detection_match_pt_vs_onnx.json`
-- `build/yolov8n/yolov8n_detection_match_pt_vs_tflite.json`
-- `yolov8n/detection_match.py` is used as a subprocess helper for robust
-  detection-signature comparison (isolated backend crashes/errors).
+- `build/yolov8n/yolov8n_pipeline_summary.json`
+- `build/yolov8n/imgsz_320/yolov8n_preconcat.onnx`
+- `build/yolov8n/imgsz_320/yolov8n_int8.tflite`
+- `build/yolov8n/imgsz_320/vela/vela_compile_report.json`
+- `build/yolov8n/imgsz_320/yolov8n_tflite_output_quantization.json`
+- `build/yolov8n/imgsz_320/yolov8n_raw_output_diff.json`
+- `build/yolov8n/imgsz_320/yolov8n_detection_match_pt_vs_onnx.json`
+- `build/yolov8n/imgsz_320/yolov8n_detection_match_pt_vs_tflite.json`
+
+Helper scripts:
+- `yolov8n/export_yolo_onnx.py`
+- `yolov8n/collect_pt_signatures.py`
+- `yolov8n/detection_match.py` (legacy helper retained for prior flow)
 
 ## 3) CRNN real-model pipeline
 
