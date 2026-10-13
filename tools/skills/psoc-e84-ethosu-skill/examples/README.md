@@ -7,7 +7,15 @@ This directory provides runnable examples for three model scales.
 ```bash
 python3 tools/skills/psoc-e84-ethosu-skill/scripts/run_pipeline.py \
   --work-dir tools/skills/psoc-e84-ethosu-skill/build/pipeline_demo \
-  --target psoc_e84
+  --target psoc_e84 \
+  --optimize-onnx-layout
+```
+
+Optional after Vela (also default in `run_pipeline.py`):
+
+```bash
+python3 tools/skills/psoc-e84-ethosu-skill/scripts/analyze_cpu_fallback.py \
+  --vela-report tools/skills/psoc-e84-ethosu-skill/build/pipeline_demo/vela/vela_compile_report.json
 ```
 
 ## 2) YOLOv8n real-model pipeline

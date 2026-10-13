@@ -32,11 +32,14 @@ It does **not** modify existing Qualcomm QNN workflow files.
 - `scripts/export_pytorch_to_onnx.py` - export + golden tensors
 - `scripts/onnx_sanity_check.py` - ONNX checks
 - `scripts/onnx_to_tflite_int8.py` - ONNX->TFLite int8 conversion
+- `scripts/onnx_layout_optimizer.py` - ONNX layout-glue cleanup (optional)
+- `scripts/analyze_cpu_fallback.py` - classify Vela CPU fallback ops
+- `scripts/sweep_conversion_options.py` - small converter grid, no-regression pick
 - `scripts/compile_with_vela.py` - Vela compile and report
 - `scripts/compare_accuracy.py` - golden parity checks
 - `scripts/run_fvp_harness.py` - Corstone-300 build/run hooks
 - `scripts/run_pipeline.py` - staged loop orchestration
-- `references/` - operator patching, quantization, transpose constraints, troubleshooting docs
+- `references/` - operator patching, layout-fallback playbook, quantization, troubleshooting docs
 - `examples/` - tiny CNN and real-model pipeline helpers
 
 ---
@@ -48,8 +51,16 @@ python tools/skills/psoc-e84-ethosu-skill/scripts/ethosu_preflight_check.py
 
 python tools/skills/psoc-e84-ethosu-skill/scripts/run_pipeline.py \
   --work-dir tools/skills/psoc-e84-ethosu-skill/build/pipeline_demo \
-  --target psoc_e84
+  --target psoc_e84 \
+  --optimize-onnx-layout
 ```
+
+Layout CPU-fallback tooling (generic, not YOLO-specific):
+
+1. Read `references/layout_fallback_playbook.md`
+2. `scripts/analyze_cpu_fallback.py --vela-report .../vela_compile_report.json`
+3. Optional `scripts/onnx_layout_optimizer.py` before conversion
+4. Optional `scripts/sweep_conversion_options.py` (tiny grid; rejects CPU regressions)
 
 If you already have a model and calibration data, call stage scripts directly.
 
@@ -89,6 +100,15 @@ python3 tools/skills/psoc-e84-ethosu-skill/examples/crnn/run_crnn_pipeline.py \
   board-specific timing + linker constraints.
 
 ---
+
+## Layout-fallback tooling validation
+
+- **YOLOv8n 320 (existing artifacts, no reconvert):**
+  - `analyze_cpu_fallback.py`: CPU 25 = **24 layout_glue + 1 inherent**
+  - `onnx_layout_optimizer.py` on preconcat ONNX: Transpose **1→1** (no inverse pairs to cancel; glue is in onnx2tf, not ONNX). ORT max-abs `0.0`
+- **tinycnn (`run_pipeline.py --optimize-onnx-layout --sweep-conversion`):**
+  - ONNX has 0 Transpose; Vela still reports **1 layout_glue** TRANSPOSE (conversion-introduced)
+  - Sweep winner: `default` (CPU 1). `nodaftc2` dropped TRANSPOSE to 0 but CPU rose **1→9** and was rejected
 
 ## Real-model validation snapshot (cloud VM)
 

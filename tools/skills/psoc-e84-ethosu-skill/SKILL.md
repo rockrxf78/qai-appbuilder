@@ -50,7 +50,9 @@ with CMSIS-NN/CPU fallback for unsupported ops.
    - Save `golden_input.npy`, `golden_output.npy`
 
 3. **ONNX structural checks + patch loop**
+   - Read `references/layout_fallback_playbook.md` **first** if Vela shows TRANSPOSE/CPU glue
    - `scripts/onnx_sanity_check.py`
+   - Optional: `scripts/onnx_layout_optimizer.py` (`run_pipeline.py --optimize-onnx-layout`)
    - Detect dynamic dims, NCHW usage, and risky ops
    - Apply model patching rules from `references/operator_patching_ethosu.md`
    - Repeat until conversion-risk ops are removed or accepted as CPU fallback
@@ -58,11 +60,9 @@ with CMSIS-NN/CPU fallback for unsupported ops.
 4. **ONNX -> TFLite int8 conversion**
    - `scripts/onnx_to_tflite_int8.py`
    - Use representative dataset and force full-int path by default
-   - For transpose experiments, use `--onnx2tf-flextranspose-compression-dim`
-     cautiously. `2` can suppress transpose nodes but may increase fallback for
-     other op families.
-   - `examples/yolov8n/run_yolov8n_split_pipeline.py` can run an automatic
-     export-layout transpose cleanup attempt (`--enable-transpose-cleanup`).
+   - Optional small grid: `scripts/sweep_conversion_options.py`
+     (`run_pipeline.py --sweep-conversion`). Accept a variant only with no
+     CPU/SRAM/accuracy regression. Do **not** brute-force `-nodaftc 2` on large detectors.
 
 5. **Vela compile + memory/fallback inspection**
    - `scripts/compile_with_vela.py`
@@ -76,6 +76,7 @@ with CMSIS-NN/CPU fallback for unsupported ops.
      - CPU fallback operators
      - arena estimate vs SoCMEM budget
      - `transpose_fallback_summary` (split into export/QDQ/layout vs inherent)
+   - `scripts/analyze_cpu_fallback.py` → per-op table (`layout_glue` / `qdq` / `inherent` / `unsupported_op`)
    - Default compile mode uses `--debug-force-legacy-core` for the custom
      PSoC profile on current Vela release.
    - Built-in profile fallback is opt-in only (`--allow-fallback`).
@@ -118,11 +119,9 @@ python tools/skills/psoc-e84-ethosu-skill/scripts/run_pipeline.py \
   - Built-in fallback is not automatic; pass `--allow-fallback` only when you
     intentionally want fallback behavior.
 - **High CPU fallback ratio**
-  - Check unsupported ops and rewrite pattern in references.
-  - For transpose-heavy models (e.g. YOLOv8n), inspect
-    `transpose_fallback_summary`:
-    - export/QDQ/layout = layout glue from export/conversion
-    - inherent = model-topology axis swaps
+  - Follow `references/layout_fallback_playbook.md` before changing converter flags.
+  - Run `scripts/analyze_cpu_fallback.py` on the Vela log.
+  - layout_glue → ONNX layout optimizer / NHWC export; inherent → document CPU fallback.
 - **Arena overflow**
   - Reduce activation footprint (resolution/channels, block fusion choices),
     adjust memory mode placement, or split model stages.
@@ -134,6 +133,7 @@ python tools/skills/psoc-e84-ethosu-skill/scripts/run_pipeline.py \
 
 - Workflow overview: `README.md`
 - Operator patching: `references/operator_patching_ethosu.md`
+- Layout CPU-fallback playbook: `references/layout_fallback_playbook.md`
 - Ethos-U transpose constraints: `references/ethosu_transpose_constraints.md`
 - Quantization + accuracy: `references/accuracy_and_quantization.md`
 - Troubleshooting: `references/troubleshooting.md`
@@ -146,6 +146,9 @@ python tools/skills/psoc-e84-ethosu-skill/scripts/run_pipeline.py \
 - `scripts/export_pytorch_to_onnx.py` - baseline and ONNX export
 - `scripts/onnx_sanity_check.py` - ONNX checks and risk report
 - `scripts/onnx_to_tflite_int8.py` - ONNX->TFLite int8 conversion
+- `scripts/onnx_layout_optimizer.py` - cancel/fold layout Transpose + identity QDQ
+- `scripts/analyze_cpu_fallback.py` - classify Vela CPU fallback ops
+- `scripts/sweep_conversion_options.py` - small converter grid with regression guard
 - `scripts/compile_with_vela.py` - Vela compile + report generation
 - `scripts/summarize_vela.py` - compact compile report summary
 - `scripts/compare_accuracy.py` - cross-framework accuracy checks

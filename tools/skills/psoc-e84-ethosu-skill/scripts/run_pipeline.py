@@ -50,6 +50,22 @@ def main() -> int:
         action="store_true",
         help="Allow compile_with_vela.py to fallback to built-in Vela profile",
     )
+    parser.add_argument(
+        "--optimize-onnx-layout",
+        action="store_true",
+        help="Optional: run onnx_layout_optimizer.py before TFLite conversion",
+    )
+    parser.add_argument(
+        "--analyze-cpu-fallback",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="After Vela, classify CPU fallback ops (default: on)",
+    )
+    parser.add_argument(
+        "--sweep-conversion",
+        action="store_true",
+        help="Optional: small onnx2tf option grid ranked with no-regression guard",
+    )
     args = parser.parse_args()
 
     script_dir = Path(__file__).resolve().parent
@@ -58,6 +74,7 @@ def main() -> int:
     work_dir.mkdir(parents=True, exist_ok=True)
 
     onnx_path = work_dir / "tinycnn.onnx"
+    convert_onnx = onnx_path
     tflite_path = work_dir / "tinycnn_int8.tflite"
     golden_dir = work_dir / "golden"
     rep_data = (
@@ -105,12 +122,29 @@ def main() -> int:
         ],
         cwd=root_dir,
     )
+    if args.optimize_onnx_layout:
+        convert_onnx = work_dir / "tinycnn_layout_opt.onnx"
+        _run(
+            [
+                sys.executable,
+                str(script_dir / "onnx_layout_optimizer.py"),
+                "--onnx",
+                str(onnx_path),
+                "--output-onnx",
+                str(convert_onnx),
+                "--report-json",
+                str(work_dir / "layout_opt_report.json"),
+                "--sample-input",
+                str(golden_dir / "golden_input.npy"),
+            ],
+            cwd=root_dir,
+        )
     _run(
         [
             sys.executable,
             str(script_dir / "onnx_to_tflite_int8.py"),
             "--onnx",
-            str(onnx_path),
+            str(convert_onnx),
             "--tflite-out",
             str(tflite_path),
             "--representative-data",
@@ -133,6 +167,44 @@ def main() -> int:
     if args.allow_fallback:
         vela_cmd.append("--allow-fallback")
     _run(vela_cmd, cwd=root_dir)
+    if args.analyze_cpu_fallback:
+        _run(
+            [
+                sys.executable,
+                str(script_dir / "analyze_cpu_fallback.py"),
+                "--vela-report",
+                str(vela_out_dir / "vela_compile_report.json"),
+                "--onnx",
+                str(convert_onnx),
+                "--output-dir",
+                str(vela_out_dir),
+            ],
+            cwd=root_dir,
+        )
+    if args.sweep_conversion:
+        _run(
+            [
+                sys.executable,
+                str(script_dir / "sweep_conversion_options.py"),
+                "--onnx",
+                str(convert_onnx),
+                "--representative-data",
+                str(rep_data),
+                "--work-dir",
+                str(work_dir / "conversion_sweep"),
+                "--target",
+                args.target,
+                "--input-layout",
+                "nchw",
+                "--golden-input",
+                str(golden_dir / "golden_input.npy"),
+                "--golden-output",
+                str(golden_dir / "golden_output.npy"),
+                "--max-representative-samples",
+                "32",
+            ],
+            cwd=root_dir,
+        )
     _run(
         [
             sys.executable,
@@ -161,6 +233,10 @@ def main() -> int:
     print(f"tflite: {tflite_path}")
     print(f"vela report: {vela_out_dir / 'vela_compile_report.json'}")
     print(f"accuracy report: {work_dir / 'accuracy_report.json'}")
+    if args.analyze_cpu_fallback:
+        print(f"cpu fallback analysis: {vela_out_dir / 'cpu_fallback_analysis.json'}")
+    if args.sweep_conversion:
+        print(f"conversion sweep: {work_dir / 'conversion_sweep' / 'sweep_report.json'}")
     return 0
 
 
