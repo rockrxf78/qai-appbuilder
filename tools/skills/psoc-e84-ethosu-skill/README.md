@@ -36,7 +36,7 @@ It does **not** modify existing Qualcomm QNN workflow files.
 - `scripts/compare_accuracy.py` - golden parity checks
 - `scripts/run_fvp_harness.py` - Corstone-300 build/run hooks
 - `scripts/run_pipeline.py` - staged loop orchestration
-- `references/` - operator patching, quantization, troubleshooting docs
+- `references/` - operator patching, quantization, transpose constraints, troubleshooting docs
 - `examples/` - tiny CNN and real-model pipeline helpers
 
 ---
@@ -60,7 +60,8 @@ python3 tools/skills/psoc-e84-ethosu-skill/examples/yolov8n/run_yolov8n_split_pi
   --work-dir tools/skills/psoc-e84-ethosu-skill/build/yolov8n \
   --dataset-yaml coco128.yaml \
   --calib-samples 128 --eval-samples 32 \
-  --imgsz-candidates 320,256
+  --imgsz-candidates 320,256 \
+  --onnx2tf-flextranspose-compression-dim 6
 
 python3 tools/skills/psoc-e84-ethosu-skill/examples/crnn/run_crnn_pipeline.py \
   --work-dir tools/skills/psoc-e84-ethosu-skill/build/crnn \
@@ -119,7 +120,9 @@ Key outputs:
 Observed metrics:
 - Selected run: `imgsz=320` (`256` fallback not needed because 320 already fits arena budget)
 - Operator placement: NPU `289 (92.0%)`, CPU `25 (8.0%)`
-  - CPU fallback ops are still mostly `TRANSPOSE` (count remains 25)
+  - TRANSPOSE fallback split: total `25` = removable `24` + inherent `1`
+  - removable class is mostly ONNX->TF layout glue (`[0,3,1,2]` / `[0,2,3,1]`)
+  - inherent class is one head-topology swap (`[0,1,3,2]`)
 - Memory/cycles from Vela summary:
   - SRAM arena estimate: `2800 KB` (**fits** 5 MB SoCMEM / 4096 KB arena budget)
   - Flash weights estimate: `2839.64 KB` (within 128 MB Flash budget)
@@ -130,15 +133,28 @@ Observed metrics:
   - scales are separated (`split_output_quantization_ok: true`)
 - Accuracy drift:
   - ONNX vs TFLite raw outputs (split tensors):
-    - boxes cosine mean `0.9991`, max-abs max `239.35`
-    - scores cosine mean `0.9611`, max-abs max `0.7323`
+    - boxes cosine mean `0.9989`, max-abs max `239.35`
+    - scores cosine mean `0.9499`, max-abs max `0.7323`
   - PT vs ONNX detection signature (count/class-jaccard/top1): `0.3125 / 0.7542 / 0.8571`
-  - PT vs TFLite detection signature (count/class-jaccard/top1): `0.3750 / 0.7198 / 0.8214`
+  - PT vs TFLite detection signature (count/class-jaccard/top1): `0.3438 / 0.7198 / 0.8276`
+
+TRANSPOSE mitigation experiments (same YOLOv8n 320 graph):
+- Baseline (`-nodaftc 6`): 25 TRANSPOSE fallback, CPU ops 25 (8.0%)
+- Aggressive suppression (`-nodaftc 2`): TRANSPOSE fallback became 0, but CPU fallback
+  exploded to 698 ops (30.2%), so this is **not accepted** as default.
+- Export simplify (`--export-simplify`) did not reduce TRANSPOSE fallback in this model.
+- Study artifacts:
+  - `build/yolov8n-transpose-study/baseline/`
+  - `build/yolov8n-transpose-study/optimized/`
+  - `build/yolov8n-transpose-study/simplify/`
 
 Interpretation:
 - Previous fused-output int8 path had severe detection collapse (class-jaccard near 0).
 - Split-output quantization recovered meaningful detections and non-zero agreement,
   but parity with PT is still not production-grade and needs further tuning.
+- Current Vela/Ethos-U constraints do not allow direct NPU execution of most YOLO
+  NHWC<->NCHW transpose glue; focus should be on graph/layout rewrites, not forcing
+  unsupported transposes onto NPU.
 
 ### CRNN (rockrxf78/crnn-pytorch)
 

@@ -53,6 +53,101 @@ def _extract_cpu_fallback_ops(log_text: str) -> list[str]:
     return sorted(set(ops))
 
 
+def _parse_int_list(raw: str) -> list[int]:
+    return [int(token) for token in re.findall(r"-?\d+", raw)]
+
+
+def _parse_cpu_operator_details(log_text: str) -> list[dict[str, object]]:
+    details: list[dict[str, object]] = []
+    pattern = re.compile(
+        r"CPU:\s*([A-Za-z0-9_]+)\s*=\s*(.+?)\s+\(inputs\s+(.+?),\s*outputs\s+(.+?)\)",
+        flags=re.IGNORECASE,
+    )
+    for line in log_text.splitlines():
+        match = pattern.search(line.strip())
+        if not match:
+            continue
+        details.append(
+            {
+                "op_type": match.group(1),
+                "op_name": match.group(2).strip(),
+                "inputs": match.group(3).strip(),
+                "outputs": match.group(4).strip(),
+                "raw_line": line.strip(),
+            }
+        )
+    return details
+
+
+def _classify_transpose(shape: list[int], perm: list[int]) -> tuple[str, str]:
+    # Heuristic split for reporting:
+    # - layout-glue candidates are commonly introduced by ONNX->TF layout adaptation.
+    # - non-layout swaps are usually tied to model topology (decoder/axis semantics).
+    is_rank4 = len(shape) == 4
+    is_layout_swap = tuple(perm) in {(0, 3, 1, 2), (0, 2, 3, 1)}
+    if is_rank4 and is_layout_swap:
+        if shape[1] > 1 and shape[2] > 1 and shape[3] > 1:
+            return (
+                "removable",
+                "NHWC<->NCHW layout-conversion candidate introduced by export/conversion tooling.",
+            )
+    if tuple(perm) == (0, 1, 3, 2):
+        return (
+            "inherent",
+            "Axis swap is tied to detection-head topology (not a pure NHWC<->NCHW glue pattern).",
+        )
+    return (
+        "inherent",
+        "Permutation is not a common removable layout-glue swap; treat as model-topology fallback unless proven otherwise.",
+    )
+
+
+def _parse_transpose_fallbacks(log_text: str) -> list[dict[str, object]]:
+    pattern = re.compile(
+        r"Warning:\s*TRANSPOSE\s*'([^']+)'.*?Op has ifm_shape:\s*\[([^\]]+)\]\s*and permutation is:\s*\[([^\]]+)\]",
+        flags=re.IGNORECASE | re.DOTALL,
+    )
+    entries: list[dict[str, object]] = []
+    for match in pattern.finditer(log_text):
+        op_name = match.group(1).strip()
+        ifm_shape = _parse_int_list(match.group(2))
+        permutation = _parse_int_list(match.group(3))
+        classification, reason = _classify_transpose(ifm_shape, permutation)
+        entries.append(
+            {
+                "op_name": op_name,
+                "ifm_shape": ifm_shape,
+                "permutation": permutation,
+                "classification": classification,
+                "reason": reason,
+            }
+        )
+    deduped: dict[str, dict[str, object]] = {}
+    for entry in entries:
+        deduped[str(entry["op_name"])] = entry
+    return sorted(deduped.values(), key=lambda item: str(item["op_name"]))
+
+
+def _summarize_transpose_fallbacks(
+    transpose_fallbacks: list[dict[str, object]],
+) -> dict[str, object]:
+    removable = [entry for entry in transpose_fallbacks if entry["classification"] == "removable"]
+    inherent = [entry for entry in transpose_fallbacks if entry["classification"] != "removable"]
+    return {
+        "total": len(transpose_fallbacks),
+        "removable_count": len(removable),
+        "inherent_count": len(inherent),
+        "classification_method": (
+            "Heuristic split based on permutation/shape from Vela warnings: "
+            "rank-4 [0,3,1,2] or [0,2,3,1] with non-trivial H/W/C -> removable layout glue; "
+            "other permutations -> inherent."
+        ),
+        "removable_examples": removable[:8],
+        "inherent_examples": inherent[:8],
+        "all": transpose_fallbacks,
+    }
+
+
 def _parse_operator_breakdown(log_text: str) -> dict[str, float | int]:
     payload: dict[str, float | int] = {}
     cpu_match = re.search(r"CPU operators\s*=\s*(\d+)\s*\(([\d\.]+)%\)", log_text)
@@ -261,6 +356,13 @@ def main() -> int:
     cpu_fallback_ops = _extract_cpu_fallback_ops(
         active_completed.stdout + "\n" + active_completed.stderr
     )
+    cpu_fallback_details = _parse_cpu_operator_details(
+        active_completed.stdout + "\n" + active_completed.stderr
+    )
+    transpose_fallbacks = _parse_transpose_fallbacks(
+        active_completed.stdout + "\n" + active_completed.stderr
+    )
+    transpose_summary = _summarize_transpose_fallbacks(transpose_fallbacks)
     summary_rows = _read_summary_csv(output_dir)
     arena_kb = _estimate_arena_usage_kb(summary_rows)
     flash_kb = _estimate_flash_usage_kb(summary_rows)
@@ -284,6 +386,13 @@ def main() -> int:
     if cpu_fallback_ops:
         warnings.append(
             "CPU fallback ops detected. Inspect operator patching guidance before acceptance."
+        )
+    if transpose_summary["total"]:
+        warnings.append(
+            "TRANSPOSE fallback split: "
+            f"total={transpose_summary['total']}, "
+            f"removable={transpose_summary['removable_count']}, "
+            f"inherent={transpose_summary['inherent_count']}."
         )
     if arena_kb is not None and arena_kb > target.arena_budget_kb:
         warnings.append(
@@ -312,7 +421,9 @@ def main() -> int:
         "active_command": active_cmd,
         "compiled_models": [str(p) for p in compiled_models],
         "cpu_fallback_ops": cpu_fallback_ops,
+        "cpu_fallback_details": cpu_fallback_details,
         "operator_breakdown": operator_breakdown,
+        "transpose_fallback_summary": transpose_summary,
         "arena_estimate_kb": arena_kb,
         "flash_estimate_kb": flash_kb,
         "target_arena_budget_kb": target.arena_budget_kb,

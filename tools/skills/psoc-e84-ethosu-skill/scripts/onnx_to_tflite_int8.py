@@ -174,6 +174,34 @@ def main() -> int:
         default="",
         help="Override onnx2tf -qns argument (e.g. '[[[[1.0,1.0,1.0]]]]')",
     )
+    parser.add_argument(
+        "--keep-nchw-input",
+        action="store_true",
+        help=(
+            "Pass onnx2tf -k <input_name> to preserve NCHW input layout. "
+            "Useful for layout experiments; may increase downstream CPU transpose fallback."
+        ),
+    )
+    parser.add_argument(
+        "--onnx2tf-flextranspose-compression-dim",
+        type=int,
+        default=None,
+        help=(
+            "Pass onnx2tf -nodaftc <N> to control FlexTranspose suppression. "
+            "A value of 2 requests stronger transpose suppression."
+        ),
+    )
+    parser.add_argument(
+        "--onnx2tf-disable-strict-mode",
+        action="store_true",
+        help="Pass onnx2tf -dsm (faster conversion, potentially less stable accuracy/layout fixes).",
+    )
+    parser.add_argument(
+        "--onnx2tf-extra-args",
+        nargs="*",
+        default=[],
+        help="Extra raw arguments appended to onnx2tf command.",
+    )
     args = parser.parse_args()
 
     onnx = _load_onnx()
@@ -254,6 +282,14 @@ def main() -> int:
             "-qns",
             std,
         ]
+        if args.keep_nchw_input:
+            cmd += ["-k", input_name]
+        if args.onnx2tf_flextranspose_compression_dim is not None:
+            cmd += ["-nodaftc", str(args.onnx2tf_flextranspose_compression_dim)]
+        if args.onnx2tf_disable_strict_mode:
+            cmd.append("-dsm")
+        if args.onnx2tf_extra_args:
+            cmd.extend(args.onnx2tf_extra_args)
 
         env = dict(**os.environ)
         local_bin = str(Path.home() / ".local" / "bin")
@@ -306,6 +342,10 @@ def main() -> int:
         "auto_normalize": args.auto_normalize,
         "quant_norm_mean": mean,
         "quant_norm_std": std,
+        "keep_nchw_input": args.keep_nchw_input,
+        "onnx2tf_flextranspose_compression_dim": args.onnx2tf_flextranspose_compression_dim,
+        "onnx2tf_disable_strict_mode": args.onnx2tf_disable_strict_mode,
+        "onnx2tf_extra_args": args.onnx2tf_extra_args,
         "allow_non_int8_output": args.allow_non_int8_output,
         "max_representative_samples": args.max_representative_samples,
         "work_dir": str(work_dir),

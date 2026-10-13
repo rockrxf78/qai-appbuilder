@@ -58,6 +58,9 @@ with CMSIS-NN/CPU fallback for unsupported ops.
 4. **ONNX -> TFLite int8 conversion**
    - `scripts/onnx_to_tflite_int8.py`
    - Use representative dataset and force full-int path by default
+   - For transpose experiments, use `--onnx2tf-flextranspose-compression-dim`
+     cautiously. `2` can suppress transpose nodes but may increase fallback for
+     other op families.
 
 5. **Vela compile + memory/fallback inspection**
    - `scripts/compile_with_vela.py`
@@ -70,6 +73,7 @@ with CMSIS-NN/CPU fallback for unsupported ops.
    - Analyze generated report:
      - CPU fallback operators
      - arena estimate vs SoCMEM budget
+     - `transpose_fallback_summary` (split into removable vs inherent)
    - Default compile mode uses `--debug-force-legacy-core` for the custom
      PSoC profile on current Vela release.
    - Built-in profile fallback is opt-in only (`--allow-fallback`).
@@ -113,6 +117,10 @@ python tools/skills/psoc-e84-ethosu-skill/scripts/run_pipeline.py \
     intentionally want fallback behavior.
 - **High CPU fallback ratio**
   - Check unsupported ops and rewrite pattern in references.
+  - For transpose-heavy models (e.g. YOLOv8n), inspect
+    `transpose_fallback_summary`:
+    - removable = layout glue from export/conversion
+    - inherent = model-topology axis swaps
 - **Arena overflow**
   - Reduce activation footprint (resolution/channels, block fusion choices),
     adjust memory mode placement, or split model stages.
@@ -124,6 +132,7 @@ python tools/skills/psoc-e84-ethosu-skill/scripts/run_pipeline.py \
 
 - Workflow overview: `README.md`
 - Operator patching: `references/operator_patching_ethosu.md`
+- Ethos-U transpose constraints: `references/ethosu_transpose_constraints.md`
 - Quantization + accuracy: `references/accuracy_and_quantization.md`
 - Troubleshooting: `references/troubleshooting.md`
 - FVP notes: `references/fvp_corstone300.md`

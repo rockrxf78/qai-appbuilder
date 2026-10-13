@@ -14,12 +14,23 @@ def main() -> int:
     parser.add_argument("--weights", required=True)
     parser.add_argument("--imgsz", type=int, required=True)
     parser.add_argument("--output-onnx", required=True)
+    parser.add_argument(
+        "--simplify",
+        action="store_true",
+        help="Enable Ultralytics ONNX simplify pass during export.",
+    )
     args = parser.parse_args()
 
     output = Path(args.output_onnx).resolve()
     output.parent.mkdir(parents=True, exist_ok=True)
     model = YOLO(args.weights)
-    exported = model.export(format="onnx", imgsz=args.imgsz, opset=13, dynamic=False, simplify=False)
+    exported = model.export(
+        format="onnx",
+        imgsz=args.imgsz,
+        opset=13,
+        dynamic=False,
+        simplify=args.simplify,
+    )
     exported_path = Path(exported).resolve()
     if exported_path != output:
         output.write_bytes(exported_path.read_bytes())

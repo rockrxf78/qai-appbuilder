@@ -422,6 +422,7 @@ def _run_for_imgsz(
                 str(imgsz),
                 "--output-onnx",
                 str(onnx_path),
+                * (["--simplify"] if args.export_simplify else []),
             ],
             cwd=repo_root,
         )
@@ -456,6 +457,8 @@ def _run_for_imgsz(
             "nchw",
             "--max-representative-samples",
             str(args.calib_samples),
+            "--onnx2tf-flextranspose-compression-dim",
+            str(args.onnx2tf_flextranspose_compression_dim),
         ],
         cwd=repo_root,
     )
@@ -569,7 +572,9 @@ def _run_for_imgsz(
         "arena_fit_under_4096kb": arena_fit,
         "vela_operator_breakdown": vela_report.get("operator_breakdown", {}),
         "vela_cpu_fallback_ops_count": len(vela_report.get("cpu_fallback_ops", [])),
+        "vela_transpose_fallback_summary": vela_report.get("transpose_fallback_summary", {}),
         "vela_warnings": vela_report.get("warnings", []),
+        "onnx2tf_flextranspose_compression_dim": args.onnx2tf_flextranspose_compression_dim,
     }
     (run_dir / "yolov8n_run_report.json").write_text(json.dumps(run_report, indent=2), encoding="utf-8")
     return run_report
@@ -591,6 +596,21 @@ def main() -> int:
     parser.add_argument("--conf", type=float, default=0.25)
     parser.add_argument("--iou", type=float, default=0.7)
     parser.add_argument("--force-export", action="store_true")
+    parser.add_argument(
+        "--export-simplify",
+        action="store_true",
+        help="Enable Ultralytics ONNX simplify pass during export.",
+    )
+    parser.add_argument(
+        "--onnx2tf-flextranspose-compression-dim",
+        type=int,
+        default=6,
+        help=(
+            "Pass through to onnx2tf -nodaftc. "
+            "Lower values can suppress conversion-introduced transpose ops but may increase"
+            " fallback in other operator families."
+        ),
+    )
     parser.add_argument(
         "--try-all-sizes",
         action="store_true",

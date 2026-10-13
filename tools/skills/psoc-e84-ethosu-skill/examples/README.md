@@ -25,7 +25,8 @@ python3 tools/skills/psoc-e84-ethosu-skill/examples/yolov8n/run_yolov8n_split_pi
   --dataset-yaml coco128.yaml \
   --calib-samples 128 \
   --eval-samples 32 \
-  --imgsz-candidates 320,256
+  --imgsz-candidates 320,256 \
+  --onnx2tf-flextranspose-compression-dim 6
 ```
 
 Key outputs:
@@ -37,6 +38,16 @@ Key outputs:
 - `build/yolov8n/imgsz_320/yolov8n_raw_output_diff.json`
 - `build/yolov8n/imgsz_320/yolov8n_detection_match_pt_vs_onnx.json`
 - `build/yolov8n/imgsz_320/yolov8n_detection_match_pt_vs_tflite.json`
+- `build/yolov8n/imgsz_320/vela/vela_compile_report.json` includes
+  `transpose_fallback_summary` with:
+  - `removable_count` (layout-glue transpose candidates)
+  - `inherent_count` (non-layout/head-topology transposes)
+
+Tuning notes:
+- `--onnx2tf-flextranspose-compression-dim 2` can suppress transpose ops, but
+  in current YOLOv8n tests it increased total CPU fallback significantly.
+- `--export-simplify` is supported, but did not reduce fallback transpose count
+  in current validation runs.
 
 Helper scripts:
 - `yolov8n/export_yolo_onnx.py`
