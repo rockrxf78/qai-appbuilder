@@ -116,12 +116,13 @@ Key outputs:
 - `build/yolov8n/imgsz_320/yolov8n_raw_output_diff.json`
 - `build/yolov8n/imgsz_320/yolov8n_detection_match_pt_vs_onnx.json`
 - `build/yolov8n/imgsz_320/yolov8n_detection_match_pt_vs_tflite.json`
+- `build/yolov8n/imgsz_320/yolov8n_transpose_fallback_classification.json`
 
 Observed metrics:
 - Selected run: `imgsz=320` (`256` fallback not needed because 320 already fits arena budget)
 - Operator placement: NPU `289 (92.0%)`, CPU `25 (8.0%)`
-  - TRANSPOSE fallback split: total `25` = removable `24` + inherent `1`
-  - removable class is mostly ONNX->TF layout glue (`[0,3,1,2]` / `[0,2,3,1]`)
+  - TRANSPOSE fallback split: total `25` = export/QDQ/layout `24` + inherent `1`
+  - export/QDQ/layout class is mostly ONNX->TF layout glue (`[0,3,1,2]` / `[0,2,3,1]`)
   - inherent class is one head-topology swap (`[0,1,3,2]`)
 - Memory/cycles from Vela summary:
   - SRAM arena estimate: `2800 KB` (**fits** 5 MB SoCMEM / 4096 KB arena budget)
@@ -143,6 +144,9 @@ TRANSPOSE mitigation experiments (same YOLOv8n 320 graph):
 - Aggressive suppression (`-nodaftc 2`): TRANSPOSE fallback became 0, but CPU fallback
   exploded to 698 ops (30.2%), so this is **not accepted** as default.
 - Export simplify (`--export-simplify`) did not reduce TRANSPOSE fallback in this model.
+- The YOLO pipeline now performs a built-in cleanup attempt (`--enable-transpose-cleanup`)
+  and accepts it only if export/QDQ/layout transpose count improves **without**
+  increasing non-transpose CPU fallback.
 - Study artifacts:
   - `build/yolov8n-transpose-study/baseline/`
   - `build/yolov8n-transpose-study/optimized/`

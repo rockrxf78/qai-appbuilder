@@ -61,6 +61,8 @@ with CMSIS-NN/CPU fallback for unsupported ops.
    - For transpose experiments, use `--onnx2tf-flextranspose-compression-dim`
      cautiously. `2` can suppress transpose nodes but may increase fallback for
      other op families.
+   - `examples/yolov8n/run_yolov8n_split_pipeline.py` can run an automatic
+     export-layout transpose cleanup attempt (`--enable-transpose-cleanup`).
 
 5. **Vela compile + memory/fallback inspection**
    - `scripts/compile_with_vela.py`
@@ -73,7 +75,7 @@ with CMSIS-NN/CPU fallback for unsupported ops.
    - Analyze generated report:
      - CPU fallback operators
      - arena estimate vs SoCMEM budget
-     - `transpose_fallback_summary` (split into removable vs inherent)
+     - `transpose_fallback_summary` (split into export/QDQ/layout vs inherent)
    - Default compile mode uses `--debug-force-legacy-core` for the custom
      PSoC profile on current Vela release.
    - Built-in profile fallback is opt-in only (`--allow-fallback`).
@@ -119,7 +121,7 @@ python tools/skills/psoc-e84-ethosu-skill/scripts/run_pipeline.py \
   - Check unsupported ops and rewrite pattern in references.
   - For transpose-heavy models (e.g. YOLOv8n), inspect
     `transpose_fallback_summary`:
-    - removable = layout glue from export/conversion
+    - export/QDQ/layout = layout glue from export/conversion
     - inherent = model-topology axis swaps
 - **Arena overflow**
   - Reduce activation footprint (resolution/channels, block fusion choices),

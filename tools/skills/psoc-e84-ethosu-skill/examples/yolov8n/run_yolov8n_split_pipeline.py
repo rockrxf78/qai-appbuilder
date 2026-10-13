@@ -387,6 +387,21 @@ def _read_json(path: Path) -> dict:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
+def _cpu_breakdown_from_vela_report(report: dict[str, object]) -> tuple[int, int]:
+    operator = report.get("operator_breakdown", {})
+    cpu_total = int(operator.get("cpu_operator_count", 0) or 0)
+    transpose = report.get("transpose_fallback_summary", {})
+    layout_count = int(
+        transpose.get(
+            "export_qdq_layout_count",
+            transpose.get("removable_count", 0),
+        )
+        or 0
+    )
+    non_transpose_cpu = max(0, cpu_total - layout_count)
+    return cpu_total, non_transpose_cpu
+
+
 def _run_for_imgsz(
     args: argparse.Namespace,
     repo_root: Path,
@@ -476,6 +491,105 @@ def _run_for_imgsz(
         ],
         cwd=repo_root,
     )
+    baseline_vela_report = _read_json(vela_dir / "vela_compile_report.json")
+
+    selected_tflite = tflite_path
+    selected_vela_dir = vela_dir
+    transpose_cleanup_attempt: dict[str, object] | None = None
+
+    if args.enable_transpose_cleanup:
+        cleanup_tflite = run_dir / "yolov8n_int8_transpose_cleanup.tflite"
+        cleanup_onnx2tf_out = run_dir / "onnx2tf_out_transpose_cleanup"
+        cleanup_vela_dir = run_dir / "vela_transpose_cleanup"
+        _run(
+            [
+                sys.executable,
+                str(scripts_dir / "onnx_to_tflite_int8.py"),
+                "--onnx",
+                str(split_onnx_path),
+                "--work-dir",
+                str(cleanup_onnx2tf_out),
+                "--tflite-out",
+                str(cleanup_tflite),
+                "--representative-data",
+                str(rep_data_path),
+                "--input-layout",
+                "nchw",
+                "--max-representative-samples",
+                str(args.calib_samples),
+                "--onnx2tf-flextranspose-compression-dim",
+                str(args.transpose_cleanup_flextranspose_dim),
+            ],
+            cwd=repo_root,
+        )
+        _run(
+            [
+                sys.executable,
+                str(scripts_dir / "compile_with_vela.py"),
+                "--tflite",
+                str(cleanup_tflite),
+                "--target",
+                args.target,
+                "--output-dir",
+                str(cleanup_vela_dir),
+            ],
+            cwd=repo_root,
+        )
+        cleanup_vela_report = _read_json(cleanup_vela_dir / "vela_compile_report.json")
+        baseline_transpose = baseline_vela_report.get("transpose_fallback_summary", {})
+        cleanup_transpose = cleanup_vela_report.get("transpose_fallback_summary", {})
+        baseline_layout = int(
+            baseline_transpose.get(
+                "export_qdq_layout_count",
+                baseline_transpose.get("removable_count", 0),
+            )
+            or 0
+        )
+        cleanup_layout = int(
+            cleanup_transpose.get(
+                "export_qdq_layout_count",
+                cleanup_transpose.get("removable_count", 0),
+            )
+            or 0
+        )
+        baseline_cpu_total, baseline_non_transpose = _cpu_breakdown_from_vela_report(
+            baseline_vela_report
+        )
+        cleanup_cpu_total, cleanup_non_transpose = _cpu_breakdown_from_vela_report(
+            cleanup_vela_report
+        )
+        accepted = (
+            cleanup_layout < baseline_layout
+            and cleanup_non_transpose <= baseline_non_transpose
+            and cleanup_cpu_total <= baseline_cpu_total
+        )
+        reason = (
+            "accepted cleanup variant"
+            if accepted
+            else (
+                "rejected cleanup variant because it did not improve layout-transpose fallback "
+                "without increasing other CPU fallback ops"
+            )
+        )
+        if accepted:
+            selected_tflite = cleanup_tflite
+            selected_vela_dir = cleanup_vela_dir
+        transpose_cleanup_attempt = {
+            "enabled": True,
+            "cleanup_flextranspose_dim": args.transpose_cleanup_flextranspose_dim,
+            "accepted": accepted,
+            "reason": reason,
+            "baseline_report": str(vela_dir / "vela_compile_report.json"),
+            "cleanup_report": str(cleanup_vela_dir / "vela_compile_report.json"),
+            "baseline_cpu_operator_count": baseline_cpu_total,
+            "cleanup_cpu_operator_count": cleanup_cpu_total,
+            "baseline_non_transpose_cpu_operator_count": baseline_non_transpose,
+            "cleanup_non_transpose_cpu_operator_count": cleanup_non_transpose,
+            "baseline_export_qdq_layout_transpose_count": baseline_layout,
+            "cleanup_export_qdq_layout_transpose_count": cleanup_layout,
+        }
+    else:
+        transpose_cleanup_attempt = {"enabled": False}
 
     pt_sig_json = run_dir / "pt_signatures.json"
     _run(
@@ -501,7 +615,7 @@ def _run_for_imgsz(
 
     onnx_sigs, tfl_sigs, aux = _collect_backend_signatures(
         onnx_path=split_onnx_path,
-        tflite_path=tflite_path,
+        tflite_path=selected_tflite,
         image_paths=eval_paths,
         imgsz=imgsz,
         conf_thres=args.conf,
@@ -529,9 +643,15 @@ def _run_for_imgsz(
         encoding="utf-8",
     )
 
-    vela_report = _read_json(vela_dir / "vela_compile_report.json")
+    vela_report = _read_json(selected_vela_dir / "vela_compile_report.json")
     arena_kb = vela_report.get("arena_estimate_kb")
     arena_fit = isinstance(arena_kb, (int, float)) and float(arena_kb) <= 4096.0
+    transpose_summary = vela_report.get("transpose_fallback_summary", {})
+    transpose_classification_json = run_dir / "yolov8n_transpose_fallback_classification.json"
+    transpose_classification_json.write_text(
+        json.dumps(transpose_summary, indent=2),
+        encoding="utf-8",
+    )
 
     quant_summaries = aux["output_quantization"]
     score_scale = None
@@ -555,12 +675,13 @@ def _run_for_imgsz(
         "onnx": str(onnx_path),
         "split_onnx": str(split_onnx_path),
         "split_output_tensors": {"boxes": box_tensor_name, "scores": score_tensor_name},
-        "tflite": str(tflite_path),
-        "vela_report": str(vela_dir / "vela_compile_report.json"),
+        "tflite": str(selected_tflite),
+        "vela_report": str(selected_vela_dir / "vela_compile_report.json"),
         "raw_output_diff_report": str(raw_diff_json),
         "pt_vs_onnx_report": str(pt_vs_onnx_json),
         "pt_vs_tflite_report": str(pt_vs_tfl_json),
         "onnx_vs_tflite_report": str(onnx_vs_tfl_json),
+        "transpose_fallback_classification_report": str(transpose_classification_json),
         "pt_vs_onnx": pt_vs_onnx,
         "pt_vs_tflite": pt_vs_tfl,
         "onnx_vs_tflite": onnx_vs_tfl,
@@ -572,9 +693,10 @@ def _run_for_imgsz(
         "arena_fit_under_4096kb": arena_fit,
         "vela_operator_breakdown": vela_report.get("operator_breakdown", {}),
         "vela_cpu_fallback_ops_count": len(vela_report.get("cpu_fallback_ops", [])),
-        "vela_transpose_fallback_summary": vela_report.get("transpose_fallback_summary", {}),
+        "vela_transpose_fallback_summary": transpose_summary,
         "vela_warnings": vela_report.get("warnings", []),
         "onnx2tf_flextranspose_compression_dim": args.onnx2tf_flextranspose_compression_dim,
+        "transpose_cleanup_attempt": transpose_cleanup_attempt,
     }
     (run_dir / "yolov8n_run_report.json").write_text(json.dumps(run_report, indent=2), encoding="utf-8")
     return run_report
@@ -610,6 +732,21 @@ def main() -> int:
             "Lower values can suppress conversion-introduced transpose ops but may increase"
             " fallback in other operator families."
         ),
+    )
+    parser.add_argument(
+        "--enable-transpose-cleanup",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help=(
+            "Run an export/layout transpose-cleanup conversion attempt and accept it "
+            "only when it improves layout-transpose fallback without increasing other CPU fallback."
+        ),
+    )
+    parser.add_argument(
+        "--transpose-cleanup-flextranspose-dim",
+        type=int,
+        default=2,
+        help="onnx2tf -nodaftc value used for cleanup attempt (default: 2).",
     )
     parser.add_argument(
         "--try-all-sizes",

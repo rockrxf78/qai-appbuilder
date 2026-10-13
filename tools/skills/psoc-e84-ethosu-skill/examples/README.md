@@ -38,9 +38,10 @@ Key outputs:
 - `build/yolov8n/imgsz_320/yolov8n_raw_output_diff.json`
 - `build/yolov8n/imgsz_320/yolov8n_detection_match_pt_vs_onnx.json`
 - `build/yolov8n/imgsz_320/yolov8n_detection_match_pt_vs_tflite.json`
+- `build/yolov8n/imgsz_320/yolov8n_transpose_fallback_classification.json`
 - `build/yolov8n/imgsz_320/vela/vela_compile_report.json` includes
   `transpose_fallback_summary` with:
-  - `removable_count` (layout-glue transpose candidates)
+  - `export_qdq_layout_count` (layout-glue transpose candidates)
   - `inherent_count` (non-layout/head-topology transposes)
 
 Tuning notes:
@@ -48,6 +49,9 @@ Tuning notes:
   in current YOLOv8n tests it increased total CPU fallback significantly.
 - `--export-simplify` is supported, but did not reduce fallback transpose count
   in current validation runs.
+- `--enable-transpose-cleanup` runs an automatic cleanup attempt and keeps it
+  only if it lowers export/QDQ/layout transpose fallback without raising
+  non-transpose CPU fallback.
 
 Helper scripts:
 - `yolov8n/export_yolo_onnx.py`

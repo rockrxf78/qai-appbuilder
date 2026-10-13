@@ -88,7 +88,7 @@ def _classify_transpose(shape: list[int], perm: list[int]) -> tuple[str, str]:
     if is_rank4 and is_layout_swap:
         if shape[1] > 1 and shape[2] > 1 and shape[3] > 1:
             return (
-                "removable",
+                "export_qdq_layout",
                 "NHWC<->NCHW layout-conversion candidate introduced by export/conversion tooling.",
             )
     if tuple(perm) == (0, 1, 3, 2):
@@ -131,18 +131,24 @@ def _parse_transpose_fallbacks(log_text: str) -> list[dict[str, object]]:
 def _summarize_transpose_fallbacks(
     transpose_fallbacks: list[dict[str, object]],
 ) -> dict[str, object]:
-    removable = [entry for entry in transpose_fallbacks if entry["classification"] == "removable"]
-    inherent = [entry for entry in transpose_fallbacks if entry["classification"] != "removable"]
+    export_qdq_layout = [
+        entry for entry in transpose_fallbacks if entry["classification"] == "export_qdq_layout"
+    ]
+    inherent = [entry for entry in transpose_fallbacks if entry["classification"] != "export_qdq_layout"]
     return {
         "total": len(transpose_fallbacks),
-        "removable_count": len(removable),
+        "export_qdq_layout_count": len(export_qdq_layout),
         "inherent_count": len(inherent),
+        # Backward-compatible alias used by earlier report readers/docs.
+        "removable_count": len(export_qdq_layout),
         "classification_method": (
             "Heuristic split based on permutation/shape from Vela warnings: "
-            "rank-4 [0,3,1,2] or [0,2,3,1] with non-trivial H/W/C -> removable layout glue; "
+            "rank-4 [0,3,1,2] or [0,2,3,1] with non-trivial H/W/C -> export/QDQ/layout glue; "
             "other permutations -> inherent."
         ),
-        "removable_examples": removable[:8],
+        "export_qdq_layout_examples": export_qdq_layout[:8],
+        # Backward-compatible alias used by earlier report readers/docs.
+        "removable_examples": export_qdq_layout[:8],
         "inherent_examples": inherent[:8],
         "all": transpose_fallbacks,
     }
@@ -391,7 +397,7 @@ def main() -> int:
         warnings.append(
             "TRANSPOSE fallback split: "
             f"total={transpose_summary['total']}, "
-            f"removable={transpose_summary['removable_count']}, "
+            f"export_qdq_layout={transpose_summary['export_qdq_layout_count']}, "
             f"inherent={transpose_summary['inherent_count']}."
         )
     if arena_kb is not None and arena_kb > target.arena_budget_kb:

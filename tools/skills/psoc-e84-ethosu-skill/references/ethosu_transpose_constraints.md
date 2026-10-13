@@ -30,7 +30,7 @@ These do not match the Ethos-U rank-4 restrictions above and therefore stay on C
 
 `scripts/compile_with_vela.py` emits `transpose_fallback_summary` with this split:
 
-- **removable**: rank-4 layout glue candidates (`[0,3,1,2]` or `[0,2,3,1]`)
+- **export_qdq_layout**: rank-4 layout glue candidates (`[0,3,1,2]` or `[0,2,3,1]`)
   introduced by ONNX->TF/TFLite layout adaptation.
 - **inherent**: non-layout swaps (for YOLO run: `[0,1,3,2]`) tied to model-head axis
   semantics.
@@ -45,7 +45,7 @@ Tested on YOLOv8n 320:
 
 - **Baseline conversion (`-nodaftc 6`)**
   - CPU ops: 25
-  - TRANSPOSE fallback: 25 (24 removable, 1 inherent)
+  - TRANSPOSE fallback: 25 (24 export_qdq_layout, 1 inherent)
   - NPU ratio: 92.0%
 - **Aggressive FlexTranspose suppression (`-nodaftc 2`)**
   - TRANSPOSE fallback: 0
@@ -54,3 +54,5 @@ Tested on YOLOv8n 320:
 Conclusion: for this model/toolchain, forcing away transpose nodes does not
 produce a better Ethos-U mapping overall. Keep baseline conversion for now and
 focus future optimization on graph-level NHWC-native model export/rewrite.
+The YOLO pipeline includes an automatic cleanup attempt, but accepts it only
+when layout-transpose reduction does not increase non-transpose CPU fallback.
