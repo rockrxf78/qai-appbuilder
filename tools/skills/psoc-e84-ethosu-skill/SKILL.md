@@ -1,6 +1,6 @@
 ---
 name: aipc-ethosu-toolkit
-description: AIPC-style workflow for PSoC Edge E84 (Cortex-M55 + Ethos-U55-128). Covers PyTorch->ONNX export, ONNX checks/patching, ONNX->TFLite int8 conversion, Vela compile, CPU-fallback diagnosis, memory budgeting for SoCMEM/PSRAM/Flash, and staged verification on Corstone-300 FVP or hardware.
+description: AIPC-style workflow for Arm Ethos-U NPUs. Covers Ethos-U55 (PSoC Edge E84, Corstone-300) and Ethos-U85 (Corstone-320 reference), from plugin install and skill registration through PyTorch->ONNX export, ONNX checks/patching, ONNX->TFLite int8 conversion, Vela compile, CPU-fallback diagnosis, and staged FVP or hardware verification.
 ---
 
 # AIPC Ethos-U Toolkit (PSoC Edge E84)
@@ -9,19 +9,21 @@ description: AIPC-style workflow for PSoC Edge E84 (Cortex-M55 + Ethos-U55-128).
 
 Always activate this skill when the user mentions:
 - "PSoC E84"
-- "Ethos-U55" / "ethos-u"
+- "Ethos-U55" / "Ethos-U85" / "ethos-u"
 - "Vela compile"
 - "TFLite Micro + Ethos-U"
-- "Corstone-300 FVP"
+- "Corstone-300 FVP" / "Corstone-320 FVP"
 - "ONNX to TFLite int8 for MCU"
 - "CPU fallback ops on Ethos-U"
 - "SoCMEM / PSRAM / Flash placement"
 
 ## When to Use
 
-Use this skill for Arm MCU deployment pipelines where the target NPU is Ethos-U
-(especially `ethos-u55-128`) and the runtime is TFLite Micro + Ethos-U driver,
-with CMSIS-NN/CPU fallback for unsupported ops.
+Use this skill for Arm MCU deployment pipelines where the target NPU is Ethos-U55
+or Ethos-U85 and the runtime is TFLite Micro + Ethos-U driver, with CMSIS-NN/CPU
+fallback for unsupported ops. Pick the NPU from `scripts/_ethosu_targets.py`
+(`psoc_e84` and `corstone300_u55_128_reference` are U55; `corstone320_u85_256_reference`
+is U85). Do not hard-code `ethos-u55-128` once a U85 target is selected.
 
 ## Required Guardrails
 
@@ -41,9 +43,10 @@ with CMSIS-NN/CPU fallback for unsupported ops.
 
 ## Staged Workflow (AIPC Method)
 
-1. **Preflight & target resolution**
-   - `scripts/ethosu_preflight_check.py`
-   - Resolve target profile from `scripts/_ethosu_targets.py`
+1. **Install, register, then preflight**
+   - `scripts/install_ethosu_plugin.py` writes the AppBuilder skill plugin and the U55/U85 target registry
+   - `scripts/ethosu_preflight_check.py --target <key>`
+   - Resolve the same target from `scripts/_ethosu_targets.py` for every later stage
 
 2. **Golden baseline + ONNX export**
    - `scripts/export_pytorch_to_onnx.py`
@@ -65,20 +68,20 @@ with CMSIS-NN/CPU fallback for unsupported ops.
      export-layout transpose cleanup attempt (`--enable-transpose-cleanup`).
 
 5. **Vela compile + memory/fallback inspection**
-   - `scripts/compile_with_vela.py`
-   - Always include:
-     - `--accelerator-config ethos-u55-128`
-     - `--config configs/vela_psoc_e84.ini`
-     - `--system-config psoc_e84_syscfg`
-     - `--memory-mode psoc_e84_balanced`
-     - `--show-cpu-operations`
+   - `scripts/compile_with_vela.py --target <key>`
+   - The script fills accelerator, ini, system config, and memory mode from
+     `scripts/_ethosu_targets.py`. Do not override those with U55 values when
+     the selected target is Ethos-U85.
+   - U55 custom profiles default to `--debug-force-legacy-core`. U85 uses Regor
+     and does not pass that flag.
+   - Built-in profile fallback is opt-in (`--allow-fallback`) and uses the
+     target's fallback system config (`Ethos_U55_High_End_Embedded` or
+     `Ethos_U85_SYS_DRAM_Mid`).
    - Analyze generated report:
      - CPU fallback operators
-     - arena estimate vs SoCMEM budget
+     - arena estimate vs the target budget
      - `transpose_fallback_summary` (split into export/QDQ/layout vs inherent)
-   - Default compile mode uses `--debug-force-legacy-core` for the custom
-     PSoC profile on current Vela release.
-   - Built-in profile fallback is opt-in only (`--allow-fallback`).
+     - `npu` and `accelerator_config` fields
 
 6. **Accuracy checks**
    - `scripts/compare_accuracy.py`
@@ -86,16 +89,23 @@ with CMSIS-NN/CPU fallback for unsupported ops.
    - Track cosine similarity / MAE / RMSE
 
 7. **FVP/hardware validation**
-   - `scripts/run_fvp_harness.py`
-   - Build + run TFLM Ethos-U app on Corstone-300 FVP
+   - `scripts/run_fvp_harness.py --target <key>`
+   - U55 uses Corstone-300 (`FVP_CORSTONE300_PATH`); U85 uses Corstone-320
+     (`FVP_CORSTONE320_PATH`)
    - If unavailable on current machine, keep a clear "unverified" mark
 
 ## Quick Start
 
 ```bash
+python tools/skills/psoc-e84-ethosu-skill/scripts/install_ethosu_plugin.py
+
 python tools/skills/psoc-e84-ethosu-skill/scripts/run_pipeline.py \
   --work-dir tools/skills/psoc-e84-ethosu-skill/build/pipeline_demo \
   --target psoc_e84
+
+python tools/skills/psoc-e84-ethosu-skill/scripts/run_pipeline.py \
+  --work-dir tools/skills/psoc-e84-ethosu-skill/build/pipeline_u85 \
+  --target corstone320_u85_256_reference
 ```
 
 ## Real-model examples
@@ -141,7 +151,8 @@ python tools/skills/psoc-e84-ethosu-skill/scripts/run_pipeline.py \
 
 ## Script Index
 
-- `scripts/_ethosu_targets.py` - target catalog (SoC config abstraction)
+- `scripts/_ethosu_targets.py` - U55 and U85 target catalog
+- `scripts/install_ethosu_plugin.py` - install plugin and register both NPUs
 - `scripts/ethosu_preflight_check.py` - environment/toolchain checks
 - `scripts/export_pytorch_to_onnx.py` - baseline and ONNX export
 - `scripts/onnx_sanity_check.py` - ONNX checks and risk report
@@ -149,6 +160,6 @@ python tools/skills/psoc-e84-ethosu-skill/scripts/run_pipeline.py \
 - `scripts/compile_with_vela.py` - Vela compile + report generation
 - `scripts/summarize_vela.py` - compact compile report summary
 - `scripts/compare_accuracy.py` - cross-framework accuracy checks
-- `scripts/run_fvp_harness.py` - Corstone-300 build/run hooks
+- `scripts/run_fvp_harness.py` - Corstone-300 (U55) / Corstone-320 (U85) hooks
 - `scripts/run_pipeline.py` - staged loop orchestrator
 - `examples/yolov8n/run_yolov8n_split_pipeline.py` - real-model split-output YOLO validation

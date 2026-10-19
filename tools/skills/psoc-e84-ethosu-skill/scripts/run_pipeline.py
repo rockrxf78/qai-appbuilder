@@ -18,6 +18,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+from _ethosu_targets import format_human_memory, get_target
+
 
 def _run(cmd: list[str], cwd: Path) -> None:
     print("-" * 72)
@@ -51,6 +53,10 @@ def main() -> int:
         help="Allow compile_with_vela.py to fallback to built-in Vela profile",
     )
     args = parser.parse_args()
+
+    target = get_target(args.target)
+    print(f"target: {target.key} npu={target.npu} accelerator={target.accelerator_config}")
+    print(format_human_memory(target))
 
     script_dir = Path(__file__).resolve().parent
     root_dir = script_dir.parent

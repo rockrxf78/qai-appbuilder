@@ -1,11 +1,18 @@
 # PSoC E84 Ethos-U Skill (AIPC extension)
 
 This directory adds an Ethos-U deployment skill path, modeled after
-`tools/skills/qai-runner-skill` (`aipc-toolkit`) but targeting:
+`tools/skills/qai-runner-skill` (`aipc-toolkit`) but targeting the Arm Ethos-U NPU:
 
-- **Infineon PSoC Edge E84** (assumed profile: Cortex-M55 + Ethos-U55-128)
+- **Ethos-U55** — Infineon PSoC Edge E84 (assumed profile: Cortex-M55 + Ethos-U55-128) and the Corstone-300 reference
+- **Ethos-U85** — Arm Corstone-320 reference (Cortex-M85 + Ethos-U85-256)
 - **Bare-metal / RTOS runtime**
 - **TFLite Micro + Ethos-U driver + CMSIS-NN fallback**
+
+Install registers the skill with AppBuilder and writes the same U55/U85 target table the compile path reads:
+
+```bash
+python tools/skills/psoc-e84-ethosu-skill/scripts/install_ethosu_plugin.py
+```
 
 It does **not** modify existing Qualcomm QNN workflow files.
 
@@ -16,25 +23,27 @@ It does **not** modify existing Qualcomm QNN workflow files.
 1. PyTorch -> ONNX export and golden baseline capture
 2. ONNX structural checks (dynamic dims/layout/operators)
 3. ONNX -> TFLite int8 full-integer quantization
-4. Vela compile (`ethos-u55-128`) with target config
+4. Vela compile for the selected NPU (`ethos-u55-128` or `ethos-u85-256`)
 5. CPU fallback + arena estimate report
 6. Accuracy comparison (PyTorch/ONNX/TFLite)
-7. Corstone-300 FVP harness hooks (build/run glue)
+7. Corstone-300 (U55) or Corstone-320 (U85) FVP harness hooks
 
 ---
 
 ## File layout
 
 - `SKILL.md` - skill entry and stage workflow
-- `configs/vela_psoc_e84.ini` - Vela target/system/memory profiles
-- `scripts/_ethosu_targets.py` - target table (extensible for more SoCs)
+- `configs/vela_psoc_e84.ini` - Vela profiles for Ethos-U55 targets
+- `configs/vela_ethos_u85.ini` - Vela profile for the Ethos-U85 reference target
+- `scripts/_ethosu_targets.py` - U55 and U85 target table
+- `scripts/install_ethosu_plugin.py` - register the skill plugin and both NPUs
 - `scripts/ethosu_preflight_check.py` - dependency/tool preflight
 - `scripts/export_pytorch_to_onnx.py` - export + golden tensors
 - `scripts/onnx_sanity_check.py` - ONNX checks
 - `scripts/onnx_to_tflite_int8.py` - ONNX->TFLite int8 conversion
 - `scripts/compile_with_vela.py` - Vela compile and report
 - `scripts/compare_accuracy.py` - golden parity checks
-- `scripts/run_fvp_harness.py` - Corstone-300 build/run hooks
+- `scripts/run_fvp_harness.py` - Corstone-300 (U55) / Corstone-320 (U85) hooks
 - `scripts/run_pipeline.py` - staged loop orchestration
 - `references/` - operator patching, quantization, transpose constraints, troubleshooting docs
 - `examples/` - tiny CNN and real-model pipeline helpers
@@ -44,11 +53,17 @@ It does **not** modify existing Qualcomm QNN workflow files.
 ## Quick start
 
 ```bash
-python tools/skills/psoc-e84-ethosu-skill/scripts/ethosu_preflight_check.py
+python tools/skills/psoc-e84-ethosu-skill/scripts/install_ethosu_plugin.py
+
+python tools/skills/psoc-e84-ethosu-skill/scripts/ethosu_preflight_check.py --target psoc_e84
 
 python tools/skills/psoc-e84-ethosu-skill/scripts/run_pipeline.py \
   --work-dir tools/skills/psoc-e84-ethosu-skill/build/pipeline_demo \
   --target psoc_e84
+
+python tools/skills/psoc-e84-ethosu-skill/scripts/run_pipeline.py \
+  --work-dir tools/skills/psoc-e84-ethosu-skill/build/pipeline_u85 \
+  --target corstone320_u85_256_reference
 ```
 
 If you already have a model and calibration data, call stage scripts directly.
@@ -195,17 +210,23 @@ Interpretation:
 
 ## Compile mode and fallback policy
 
-- Primary custom profile:
+- Ethos-U55 primary custom profile (`psoc_e84`):
   - `System_Config=psoc_e84_syscfg`
   - `Memory_Mode=psoc_e84_balanced`
-- Scripts use `--debug-force-legacy-core` by default because current Vela Regor
-  path still rejects this custom profile (`Feature Map memory not configured`).
+  - `--debug-force-legacy-core` stays the default because current Vela Regor
+    still rejects this custom profile (`Feature Map memory not configured`).
+- Ethos-U85 primary profile (`corstone320_u85_256_reference`):
+  - `System_Config=corstone320_u85_syscfg` in `configs/vela_ethos_u85.ini`
+  - `Memory_Mode=corstone320_u85_dedicated_sram`
+  - Regor is the default. Legacy core is not used.
+  - Opt-in fallback profile is `Ethos_U85_SYS_DRAM_Mid` / `Dedicated_Sram_384KB`.
 - Built-in profile fallback remains **opt-in only** (`--allow-fallback`).
 
 ## Not verified in this repository
 
-- Corstone-300 FVP execution of a real TFLite Micro + Ethos-U firmware image
+- Corstone-300 (U55) or Corstone-320 (U85) FVP execution of a real TFLite Micro + Ethos-U firmware image
 - Hardware execution on actual PSoC Edge E84 board
+- Ethos-U85 numbers are an Arm reference profile, not a measured board contract
 - ModusToolbox integration, flashing, and board-level perf/latency/power
 - Board-accurate memory timing parameters for Vela config
 

@@ -14,6 +14,9 @@ import sys
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
+from _ethosu_targets import format_human_memory, get_target
+from install_ethosu_plugin import plugin_registration_status
+
 
 @dataclass
 class CheckResult:
@@ -95,13 +98,11 @@ def check_vela_tools() -> list[CheckResult]:
     return results
 
 
-def check_fvp() -> list[CheckResult]:
+def check_fvp(target_key: str) -> list[CheckResult]:
     results: list[CheckResult] = []
-    env_hint = os.environ.get("FVP_CORSTONE300_PATH")
-    candidates = [
-        "FVP_Corstone_SSE-300_Ethos-U55",
-        "FVP_Corstone_SSE-300_Ethos-U55.exe",
-    ]
+    target = get_target(target_key)
+    env_hint = os.environ.get(target.fvp_env_var)
+    candidates = list(target.fvp_binaries)
     if env_hint:
         hinted = Path(env_hint).expanduser()
         if hinted.exists():
@@ -111,8 +112,10 @@ def check_fvp() -> list[CheckResult]:
                 CheckResult(
                     "tool:fvp",
                     False,
-                    f"FVP_CORSTONE300_PATH is set but missing: {hinted}",
-                    fix="Install Arm Corstone-300 FVP and update FVP_CORSTONE300_PATH",
+                    f"{target.fvp_env_var} is set but missing: {hinted}",
+                    fix=(
+                        f"Install the {target.npu} FVP and update {target.fvp_env_var}"
+                    ),
                 )
             )
         return results
@@ -125,14 +128,29 @@ def check_fvp() -> list[CheckResult]:
             CheckResult(
                 "tool:fvp",
                 False,
-                "Corstone-300 FVP binary not found",
+                f"{target.display_name} FVP binary not found",
                 fix=(
-                    "Install Arm Corstone-300 FVP and set FVP_CORSTONE300_PATH "
+                    f"Install the {target.npu} FVP and set {target.fvp_env_var} "
                     "or add the binary to PATH"
                 ),
             )
         )
     return results
+
+
+def check_plugin_registration() -> CheckResult:
+    ok, detail = plugin_registration_status()
+    if ok:
+        return CheckResult("plugin:ethosu-skill", True, detail)
+    return CheckResult(
+        "plugin:ethosu-skill",
+        False,
+        detail,
+        fix=(
+            "python tools/skills/psoc-e84-ethosu-skill/scripts/"
+            "install_ethosu_plugin.py"
+        ),
+    )
 
 
 def check_arm_toolchain() -> list[CheckResult]:
@@ -152,12 +170,13 @@ def check_arm_toolchain() -> list[CheckResult]:
     return results
 
 
-def run_checks() -> list[CheckResult]:
+def run_checks(target_key: str) -> list[CheckResult]:
     checks: list[CheckResult] = []
     checks.extend(check_python_modules())
     checks.extend(check_vela_tools())
-    checks.extend(check_fvp())
+    checks.extend(check_fvp(target_key))
     checks.extend(check_arm_toolchain())
+    checks.append(check_plugin_registration())
     return checks
 
 
@@ -173,9 +192,15 @@ def main() -> int:
         action="store_true",
         help="Print machine-readable JSON report",
     )
+    parser.add_argument(
+        "--target",
+        default="psoc_e84",
+        help="Target key from _ethosu_targets.py (selects the FVP to check)",
+    )
     args = parser.parse_args()
 
-    checks = run_checks()
+    target = get_target(args.target)
+    checks = run_checks(target.key)
     hard_failures = [
         c
         for c in checks
@@ -186,14 +211,19 @@ def main() -> int:
         payload = {
             "python": sys.version,
             "strict": args.strict,
+            "target": target.key,
+            "npu": target.npu,
+            "accelerator_config": target.accelerator_config,
             "checks": [asdict(c) for c in checks],
             "hard_failure_count": len(hard_failures),
         }
         print(json.dumps(payload, indent=2))
     else:
         print("=" * 72)
-        print("PSoC E84 Ethos-U Preflight")
+        print("Ethos-U Preflight")
         print("=" * 72)
+        print(f"target: {target.key} ({target.npu}, {target.accelerator_config})")
+        print(format_human_memory(target))
         for c in checks:
             status = "PASS" if c.ok else "FAIL"
             print(f"[{status}] {c.name}: {c.detail}")

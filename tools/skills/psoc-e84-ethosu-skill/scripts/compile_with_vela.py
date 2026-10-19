@@ -14,7 +14,31 @@ import subprocess
 import sys
 from pathlib import Path
 
-from _ethosu_targets import format_human_memory, get_target
+from _ethosu_targets import EthosUTarget, format_human_memory, get_target
+
+
+def resolve_legacy_core(target: EthosUTarget, override: bool | None) -> bool:
+    """U55 custom profiles default to the legacy core; U85 stays on Regor."""
+    if override is None:
+        return target.use_legacy_core
+    return override
+
+
+def resolve_vela_config(target: EthosUTarget, override: str) -> Path:
+    """Empty override selects the ini named by the target catalog."""
+    if override:
+        return Path(override)
+    return Path(__file__).resolve().parents[1] / "configs" / target.vela_config
+
+
+def resolve_fallback(
+    target: EthosUTarget, system_override: str, memory_override: str
+) -> tuple[str, str]:
+    """Built-in Vela profile used only when ``--allow-fallback`` is set."""
+    return (
+        system_override or target.fallback_system_config,
+        memory_override or target.fallback_memory_mode,
+    )
 
 
 def _find_vela() -> str:
@@ -230,10 +254,8 @@ def main() -> int:
     )
     parser.add_argument(
         "--vela-config",
-        default=str(
-            Path(__file__).resolve().parents[1] / "configs" / "vela_psoc_e84.ini"
-        ),
-        help="Path to Vela config .ini",
+        default="",
+        help="Path to Vela config .ini (default: the target's catalog ini)",
     )
     parser.add_argument(
         "--output-dir", default="build/vela", help="Directory for Vela output"
@@ -252,25 +274,31 @@ def main() -> int:
     parser.add_argument(
         "--legacy-core",
         action=argparse.BooleanOptionalAction,
-        default=True,
+        default=None,
         help=(
-            "Use Vela legacy Python core for primary compile "
-            "(default: enabled, because current Regor path rejects custom psoc_e84 profile)."
+            "Use Vela legacy Python core for the primary compile. "
+            "Default follows the target: on for Ethos-U55 custom profiles, "
+            "off for Ethos-U85 (Regor)."
         ),
     )
     parser.add_argument(
         "--fallback-system-config",
-        default="Ethos_U55_High_End_Embedded",
-        help="Fallback built-in Vela system config",
+        default="",
+        help="Fallback built-in Vela system config (default: target catalog)",
     )
     parser.add_argument(
         "--fallback-memory-mode",
-        default="Shared_Sram",
-        help="Fallback built-in Vela memory mode",
+        default="",
+        help="Fallback built-in Vela memory mode (default: target catalog)",
     )
     args = parser.parse_args()
 
     target = get_target(args.target)
+    use_legacy_core = resolve_legacy_core(target, args.legacy_core)
+    vela_config = resolve_vela_config(target, args.vela_config)
+    fallback_system, fallback_memory = resolve_fallback(
+        target, args.fallback_system_config, args.fallback_memory_mode
+    )
     vela = _find_vela()
     input_model = Path(args.tflite).resolve()
     if not input_model.exists():
@@ -285,7 +313,7 @@ def main() -> int:
         "--accelerator-config",
         target.accelerator_config,
         "--config",
-        str(Path(args.vela_config).resolve()),
+        str(vela_config.resolve()),
         "--system-config",
         target.system_config,
         "--memory-mode",
@@ -294,7 +322,7 @@ def main() -> int:
         "--output-dir",
         str(output_dir),
     ] + args.extra_args
-    if args.legacy_core:
+    if use_legacy_core:
         primary_cmd.append("--debug-force-legacy-core")
 
     print("=" * 72)
@@ -325,9 +353,9 @@ def main() -> int:
             "--accelerator-config",
             target.accelerator_config,
             "--system-config",
-            args.fallback_system_config,
+            fallback_system,
             "--memory-mode",
-            args.fallback_memory_mode,
+            fallback_memory,
             "--show-cpu-operations",
             "--output-dir",
             str(output_dir),
@@ -377,15 +405,15 @@ def main() -> int:
     )
 
     warnings = []
-    if args.legacy_core:
+    if use_legacy_core:
         warnings.append(
-            "Primary compile used --debug-force-legacy-core to support custom psoc_e84 profile "
-            "on current Vela release."
+            "Primary compile used --debug-force-legacy-core for "
+            f"{target.key} ({target.accelerator_config})."
         )
     if used_fallback:
         warnings.append(
-            "Primary PSoC custom config failed; compiled using fallback built-in "
-            f"profile ({args.fallback_system_config}/{args.fallback_memory_mode})."
+            "Primary custom config failed; compiled using fallback built-in "
+            f"profile ({fallback_system}/{fallback_memory})."
         )
         if initial_error:
             warnings.append(f"Primary config error: {initial_error.splitlines()[-1]}")
@@ -419,10 +447,12 @@ def main() -> int:
     report = {
         "input_tflite": str(input_model),
         "target": target.key,
+        "npu": target.npu,
         "accelerator_config": target.accelerator_config,
         "system_config": target.system_config,
         "memory_mode": target.memory_mode,
-        "used_legacy_core": args.legacy_core,
+        "vela_config": str(vela_config.resolve()),
+        "used_legacy_core": use_legacy_core,
         "used_fallback_profile": used_fallback,
         "active_command": active_cmd,
         "compiled_models": [str(p) for p in compiled_models],
