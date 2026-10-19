@@ -1,0 +1,76 @@
+{
+  "skill_id": "psoc-e84-ethosu-skill",
+  "canonical_skill": "tools/skills/psoc-e84-ethosu-skill",
+  "npu_families": [
+    "ethos-u55",
+    "ethos-u85"
+  ],
+  "targets": [
+    {
+      "key": "corstone300_u55_128_reference",
+      "display_name": "Arm Corstone-300 reference (Cortex-M55 + Ethos-U55-128)",
+      "npu": "ethos-u55",
+      "accelerator_config": "ethos-u55-128",
+      "system_config": "corstone300_ref",
+      "memory_mode": "corstone300_ref_sram",
+      "vela_config": "vela_psoc_e84.ini",
+      "use_legacy_core": true,
+      "fallback_system_config": "Ethos_U55_High_End_Embedded",
+      "fallback_memory_mode": "Shared_Sram",
+      "fvp_env_var": "FVP_CORSTONE300_PATH",
+      "fvp_binaries": [
+        "FVP_Corstone_SSE-300_Ethos-U55",
+        "FVP_Corstone_SSE-300_Ethos-U55.exe"
+      ],
+      "socmem_mb": 8,
+      "psram_mb": 0,
+      "flash_mb": 64,
+      "arena_budget_kb": 6144,
+      "notes": "Reference profile for simulation and regression. Capacity numbers are placeholders and should not be treated as a board-specific memory contract."
+    },
+    {
+      "key": "corstone320_u85_256_reference",
+      "display_name": "Arm Corstone-320 reference (Cortex-M85 + Ethos-U85-256)",
+      "npu": "ethos-u85",
+      "accelerator_config": "ethos-u85-256",
+      "system_config": "corstone320_u85_syscfg",
+      "memory_mode": "corstone320_u85_dedicated_sram",
+      "vela_config": "vela_ethos_u85.ini",
+      "use_legacy_core": false,
+      "fallback_system_config": "Ethos_U85_SYS_DRAM_Mid",
+      "fallback_memory_mode": "Dedicated_Sram_384KB",
+      "fvp_env_var": "FVP_CORSTONE320_PATH",
+      "fvp_binaries": [
+        "FVP_Corstone_SSE-320",
+        "FVP_Corstone_SSE-320.exe"
+      ],
+      "socmem_mb": 2,
+      "psram_mb": 0,
+      "flash_mb": 64,
+      "arena_budget_kb": 8192,
+      "notes": "Arm reference profile, not a production SoC contract. Ethos-U85 is compiled with Vela Regor (legacy core is U55-only). Dedicated SRAM cache is 384KB; the tensor arena is scheduled in DRAM. SRAM/DRAM sizes here are placeholders for budgeting reports."
+    },
+    {
+      "key": "psoc_e84",
+      "display_name": "Infineon PSoC Edge E84 (Cortex-M55 + Ethos-U55-128)",
+      "npu": "ethos-u55",
+      "accelerator_config": "ethos-u55-128",
+      "system_config": "psoc_e84_syscfg",
+      "memory_mode": "psoc_e84_balanced",
+      "vela_config": "vela_psoc_e84.ini",
+      "use_legacy_core": true,
+      "fallback_system_config": "Ethos_U55_High_End_Embedded",
+      "fallback_memory_mode": "Shared_Sram",
+      "fvp_env_var": "FVP_CORSTONE300_PATH",
+      "fvp_binaries": [
+        "FVP_Corstone_SSE-300_Ethos-U55",
+        "FVP_Corstone_SSE-300_Ethos-U55.exe"
+      ],
+      "socmem_mb": 5,
+      "psram_mb": 32,
+      "flash_mb": 128,
+      "arena_budget_kb": 4096,
+      "notes": "Memory split (5MB SoCMEM / 32MB PSRAM / 128MB Flash) should be validated against the final board support package and linker map. Custom system config still needs Vela's legacy core on current releases."
+    }
+  ]
+}

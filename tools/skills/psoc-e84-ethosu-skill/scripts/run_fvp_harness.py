@@ -15,18 +15,17 @@ import subprocess
 import sys
 from pathlib import Path
 
+from _ethosu_targets import EthosUTarget, get_target
 
-def _resolve_fvp(user_value: str) -> str | None:
+
+def _resolve_fvp(user_value: str, target: EthosUTarget) -> str | None:
     if user_value:
         p = Path(user_value).expanduser()
         return str(p) if p.exists() else None
-    env_path = os.environ.get("FVP_CORSTONE300_PATH")
+    env_path = os.environ.get(target.fvp_env_var)
     if env_path and Path(env_path).exists():
         return env_path
-    for candidate in (
-        "FVP_Corstone_SSE-300_Ethos-U55",
-        "FVP_Corstone_SSE-300_Ethos-U55.exe",
-    ):
+    for candidate in target.fvp_binaries:
         resolved = shutil.which(candidate)
         if resolved:
             return resolved
@@ -45,7 +44,7 @@ def _run_shell(cmd: str, cwd: Path) -> None:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Corstone-300 FVP harness")
+    parser = argparse.ArgumentParser(description="Ethos-U FVP harness")
     parser.add_argument(
         "--app-dir",
         required=True,
@@ -62,9 +61,14 @@ def main() -> int:
         help="Run command executed in --app-dir (optional)",
     )
     parser.add_argument(
+        "--target",
+        default="psoc_e84",
+        help="Target key from _ethosu_targets.py (selects the FVP binary)",
+    )
+    parser.add_argument(
         "--fvp-bin",
         default="",
-        help="Path to FVP_Corstone_SSE-300_Ethos-U55 binary",
+        help="Path to the target FVP binary (overrides catalog lookup)",
     )
     parser.add_argument(
         "--dry-run",
@@ -77,13 +81,15 @@ def main() -> int:
     if not app_dir.exists():
         raise RuntimeError(f"--app-dir not found: {app_dir}")
 
-    fvp = _resolve_fvp(args.fvp_bin)
+    target = get_target(args.target)
+    fvp = _resolve_fvp(args.fvp_bin, target)
     gcc_ok, gcc_path = _check_tool("arm-none-eabi-gcc")
     cmake_ok, cmake_path = _check_tool("cmake")
 
     print("=" * 72)
-    print("Corstone-300 FVP harness preflight")
+    print("Ethos-U FVP harness preflight")
     print("=" * 72)
+    print(f"target: {target.key} ({target.npu}, {target.accelerator_config})")
     print(f"app_dir: {app_dir}")
     print(f"fvp: {fvp or 'NOT FOUND'}")
     print(f"arm-none-eabi-gcc: {gcc_path or 'NOT FOUND'}")
@@ -92,7 +98,7 @@ def main() -> int:
     failures = []
     if not fvp:
         failures.append(
-            "Install Arm Corstone-300 FVP and set FVP_CORSTONE300_PATH "
+            f"Install the {target.npu} FVP, set {target.fvp_env_var}, "
             "or pass --fvp-bin."
         )
     if not gcc_ok:
